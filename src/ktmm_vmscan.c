@@ -212,18 +212,7 @@ static int ktmm_folio_referenced(struct folio *folio, int is_locked,
 
 	return pt_folio_referenced(folio, is_locked, memcg, vm_flags);
 }
-/**
- * alloc_migration_target - allocate page on target node for migration
- * @page: page being migrated (not used)
- * @private: pointer to target node ID
- *
- * Returns newly allocated page on target node
- */
-static struct page *alloc_migration_target(struct page *page, unsigned long private)
-{
-	int nid = *(int *)private;
-	return alloc_pages_node(nid, GFP_HIGHUSER_MOVABLE, 0);
-}
+
 
 /*****************************************************************************
  * Page Access Tracking Helper Functions
@@ -436,6 +425,18 @@ static inline bool ktmm_folio_needs_release(struct folio *folio)
 
 	return folio_has_private(folio) || (mapping && mapping_release_always(mapping));
 }
+/**
+ * ktmm_alloc_migration_target - allocate page on target node for migration
+ * @page: page being migrated (not used)
+ * @private: pointer to target node ID
+ *
+ * Returns newly allocated page on target node
+ */
+static struct page *ktmm_alloc_migration_target(struct page *page, unsigned long private)
+{
+	int nid = *(int *)private;
+	return alloc_pages_node(nid, GFP_HIGHUSER_MOVABLE, 0);
+}
 
 
 /**
@@ -518,13 +519,14 @@ static void scan_promote_list(unsigned long nr_to_scan,
   // }
   // Promote hot pages from PMEM (node 1) back to DRAM (node 0)
 	// Promote hot pages from PMEM (node 1) back to DRAM (node 0)
+	// Promote hot pages from PMEM (node 1) back to DRAM (node 0)
 	if (nr_taken) {
 		unsigned int succeeded = 0;
 		int dram_node = 0;  // Target DRAM node
 		int ret;
 		
-		// Use kernel 6.1 migrate_pages() API
-		ret = migrate_pages(&l_hold, alloc_migration_target, NULL,
+		// Use kernel 6.1 migrate_pages() API with our custom allocator
+		ret = migrate_pages(&l_hold, ktmm_alloc_migration_target, NULL,
 				    (unsigned long)&dram_node, MIGRATE_SYNC,
 				    MR_NUMA_MISPLACED, &succeeded);
 		
@@ -765,28 +767,29 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
   // }
   // Demote cold pages from DRAM (node 0) down to PMEM (node 1)
 	// Demote cold pages from DRAM (node 0) down to PMEM (node 1)
-	if (pgdat->pm_node == 0 && pmem_node_id != -1) {
-		unsigned int succeeded = 0;
-		int pmem_target = pmem_node_id;  // Target PMEM node
-		int ret;
-		
-		// Use kernel 6.1 migrate_pages() API
-		ret = migrate_pages(&folio_list, alloc_migration_target, NULL,
-				    (unsigned long)&pmem_target, MIGRATE_SYNC,
-				    MR_NUMA_MISPLACED, &succeeded);
-		
-		nr_migrated = succeeded;
-		
-		if (nr_migrated > 0) {
-			__mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
-			pr_debug("pgdat %d DEMOTED %lu folios from DRAM to PMEM\n",
-				 nid, nr_migrated);
-		}
-		
-		if (ret > 0) {
-			pr_debug("pgdat %d: %d folios failed demotion\n", nid, ret);
-		}
-	}
+// Demote cold pages from DRAM (node 0) down to PMEM (node 1)
+if (pgdat->pm_node == 0 && pmem_node_id != -1) {
+  unsigned int succeeded = 0;
+  int pmem_target = pmem_node_id;  // Target PMEM node
+  int ret;
+  
+  // Use kernel 6.1 migrate_pages() API with our custom allocator
+  ret = migrate_pages(&folio_list, ktmm_alloc_migration_target, NULL,
+          (unsigned long)&pmem_target, MIGRATE_SYNC,
+          MR_NUMA_MISPLACED, &succeeded);
+  
+  nr_migrated = succeeded;
+  
+  if (nr_migrated > 0) {
+    __mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
+    pr_debug("pgdat %d DEMOTED %lu folios from DRAM to PMEM\n",
+       nid, nr_migrated);
+  }
+  
+  if (ret > 0) {
+    pr_debug("pgdat %d: %d folios failed demotion\n", nid, ret);
+  }
+}
   
 	spin_lock_irq(&lruvec->lru_lock);
 
