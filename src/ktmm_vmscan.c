@@ -233,7 +233,7 @@ static int ktmm_folio_referenced(struct folio *folio, int is_locked,
  * it won't show as accessed again (avoiding duplicate logging).
  */
 static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, const char *location)
-{/
+{
     int was_accessed;
     const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
     
