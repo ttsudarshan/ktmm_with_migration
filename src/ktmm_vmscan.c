@@ -242,8 +242,8 @@ static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, co
     
     if (was_accessed) {
         /* Print the access information */
-        printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, jiffies=%lu) ***\n", 
-                 location, folio, node_type, jiffies);
+        // printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, jiffies=%lu) ***\n", 
+        //          location, folio, node_type, jiffies);
         
         /* Immediately clear the bit after printing so we don't print it again in the same scan */
         folio_clear_referenced(folio);
