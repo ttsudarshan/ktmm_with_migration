@@ -212,6 +212,18 @@ static int ktmm_folio_referenced(struct folio *folio, int is_locked,
 
 	return pt_folio_referenced(folio, is_locked, memcg, vm_flags);
 }
+/**
+ * alloc_migration_target - allocate page on target node for migration
+ * @page: page being migrated (not used)
+ * @private: pointer to target node ID
+ *
+ * Returns newly allocated page on target node
+ */
+static struct page *alloc_migration_target(struct page *page, unsigned long private)
+{
+	int nid = *(int *)private;
+	return alloc_pages_node(nid, GFP_HIGHUSER_MOVABLE, 0);
+}
 
 /*****************************************************************************
  * Page Access Tracking Helper Functions
@@ -505,6 +517,7 @@ static void scan_promote_list(unsigned long nr_to_scan,
   //   // pr_debug("pgdat %d MIGRATION DISABLED - would have migrated %lu folios from promote list", nid, nr_taken);
   // }
   // Promote hot pages from PMEM (node 1) back to DRAM (node 0)
+	// Promote hot pages from PMEM (node 1) back to DRAM (node 0)
 	if (nr_taken) {
 		unsigned int succeeded = 0;
 		int dram_node = 0;  // Target DRAM node
@@ -527,7 +540,6 @@ static void scan_promote_list(unsigned long nr_to_scan,
 			pr_debug("pgdat %d: %d folios failed promotion\n", nid, ret);
 		}
 	}
-
 	spin_lock_irq(&lruvec->lru_lock);
 
 	ktmm_move_folios_to_lru(lruvec, &l_hold);
@@ -752,6 +764,7 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
   //   // pr_debug("pgdat %d MIGRATION DISABLED - would have migrated %lu folios from inactive list", nid, nr_taken);
   // }
   // Demote cold pages from DRAM (node 0) down to PMEM (node 1)
+	// Demote cold pages from DRAM (node 0) down to PMEM (node 1)
 	if (pgdat->pm_node == 0 && pmem_node_id != -1) {
 		unsigned int succeeded = 0;
 		int pmem_target = pmem_node_id;  // Target PMEM node
