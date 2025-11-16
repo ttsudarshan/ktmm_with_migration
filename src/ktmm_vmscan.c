@@ -425,14 +425,12 @@ static inline bool ktmm_folio_needs_release(struct folio *folio)
 
 	return folio_has_private(folio) || (mapping && mapping_release_always(mapping));
 }
-/**
- * ktmm_alloc_migration_target - allocate page on target node for migration
- * @page: page being migrated (not used)
- * @private: pointer to target node ID
- *
- * Returns newly allocated page on target node
- */
-
+//ktmm alloc migration targer
+static struct page *ktmm_alloc_migration_target(struct page *page, unsigned long private)
+{
+	int nid = *(int *)private;
+	return alloc_pages_node(nid, GFP_HIGHUSER_MOVABLE, 0);
+}
 /**
  * scan_promote_list - scan promote lru folios for migration
  *
