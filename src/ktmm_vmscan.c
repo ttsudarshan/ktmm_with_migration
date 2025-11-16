@@ -521,27 +521,14 @@ static void scan_promote_list(unsigned long nr_to_scan,
 	// Promote hot pages from PMEM (node 1) back to DRAM (node 0)
 	// Promote hot pages from PMEM (node 1) back to DRAM (node 0)
 	if (nr_taken) {
-		unsigned int succeeded = 0;
-		int dram_node = 0;  // Target DRAM node
-		int ret;
-		
-		// Use kernel 6.1 migrate_pages() API with our custom allocator
-		ret = migrate_pages(&l_hold, ktmm_alloc_migration_target, NULL,
-				    (unsigned long)&dram_node, MIGRATE_SYNC,
-				    MR_NUMA_MISPLACED, &succeeded);
-		
-		nr_migrated = succeeded;
-		
-		if (nr_migrated > 0) {
-			__mod_node_page_state(pgdat, NR_PROMOTED, nr_migrated);
-			pr_debug("pgdat %d PROMOTED %lu folios from PMEM to DRAM\n", 
-				 nid, nr_migrated);
-		}
-		
-		if (ret > 0) {
-			pr_debug("pgdat %d: %d folios failed promotion\n", nid, ret);
-		}
-	}
+    unsigned int succeeded;
+    int ret = migrate_pages(&l_hold, alloc_migration_target,
+        NULL, 0, MIGRATE_SYNC, MR_MEMORY_HOTPLUG, &succeeded);
+    nr_migrated = (ret < 0 ? 0 : nr_taken - ret);
+    __mod_node_page_state(pgdat, NR_PROMOTED, nr_migrated);
+  
+    pr_debug("pgdat %d migrated %lu folios from promote list", nid, nr_migrated);
+  }
 	spin_lock_irq(&lruvec->lru_lock);
 
 	ktmm_move_folios_to_lru(lruvec, &l_hold);
@@ -769,26 +756,12 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	// Demote cold pages from DRAM (node 0) down to PMEM (node 1)
 // Demote cold pages from DRAM (node 0) down to PMEM (node 1)
 if (pgdat->pm_node == 0 && pmem_node_id != -1) {
-  unsigned int succeeded = 0;
-  int pmem_target = pmem_node_id;  // Target PMEM node
-  int ret;
-  
-  // Use kernel 6.1 migrate_pages() API with our custom allocator
-  ret = migrate_pages(&folio_list, ktmm_alloc_migration_target, NULL,
-          (unsigned long)&pmem_target, MIGRATE_SYNC,
-          MR_NUMA_MISPLACED, &succeeded);
-  
-  nr_migrated = succeeded;
-  
-  if (nr_migrated > 0) {
-    __mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
-    pr_debug("pgdat %d DEMOTED %lu folios from DRAM to PMEM\n",
-       nid, nr_migrated);
-  }
-  
-  if (ret > 0) {
-    pr_debug("pgdat %d: %d folios failed demotion\n", nid, ret);
-  }
+	unsigned int succeeded;
+	int ret = migrate_pages(&folio_list, alloc_migration_target, NULL, 
+				0, MIGRATE_SYNC, MR_MEMORY_HOTPLUG, &succeeded);
+	nr_migrated = (ret >= 0 ? nr_taken - ret : 0);
+	pr_debug("pgdat %d migrated %lu folios from inactive list", nid, nr_migrated);
+	__mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
 }
   
 	spin_lock_irq(&lruvec->lru_lock);
