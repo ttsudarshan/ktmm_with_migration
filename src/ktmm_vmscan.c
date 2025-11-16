@@ -425,12 +425,19 @@ static inline bool ktmm_folio_needs_release(struct folio *folio)
 
 	return folio_has_private(folio) || (mapping && mapping_release_always(mapping));
 }
-//ktmm alloc migration targer
+/**
+ * ktmm_alloc_migration_target - allocate page on target node for migration
+ * @page: page being migrated (not used)
+ * @private: pointer to target node ID
+ *
+ * Returns newly allocated page on target node
+ */
 static struct page *ktmm_alloc_migration_target(struct page *page, unsigned long private)
 {
 	int nid = *(int *)private;
 	return alloc_pages_node(nid, GFP_HIGHUSER_MOVABLE, 0);
 }
+
 /**
  * scan_promote_list - scan promote lru folios for migration
  *
@@ -493,34 +500,16 @@ static void scan_promote_list(unsigned long nr_to_scan,
 		}
 	}
 
-	// if (nr_taken) {
-	// 	unsigned int succeeded;
-	// 	int ret = migrate_pages(&l_hold, alloc_normal_page,
-	// 			NULL, 0, MIGRATE_SYNC, MR_MEMORY_HOTPLUG, &succeeded);
-	// 	nr_migrated = (ret < 0 ? 0 : nr_taken - ret);
-	// 	__mod_node_page_state(pgdat, NR_PROMOTED, nr_migrated);
-
-	// 	pr_debug("pgdat %d migrated %lu folios from promote list", nid, nr_migrated);
-	// }
-  
-
-  //dummy code
-  // if (nr_taken) {
-  //   nr_migrated = 0;  // No migration actually happens
-  //   // pr_debug("pgdat %d MIGRATION DISABLED - would have migrated %lu folios from promote list", nid, nr_taken);
-  // }
-  // Promote hot pages from PMEM (node 1) back to DRAM (node 0)
-	// Promote hot pages from PMEM (node 1) back to DRAM (node 0)
-	// Promote hot pages from PMEM (node 1) back to DRAM (node 0)
 	if (nr_taken) {
-    unsigned int succeeded;
-    int ret = migrate_pages(&l_hold, alloc_migration_target,
-        NULL, 0, MIGRATE_SYNC, MR_MEMORY_HOTPLUG, &succeeded);
-    nr_migrated = (ret < 0 ? 0 : nr_taken - ret);
-    __mod_node_page_state(pgdat, NR_PROMOTED, nr_migrated);
-  
-    pr_debug("pgdat %d migrated %lu folios from promote list", nid, nr_migrated);
-  }
+		unsigned int succeeded;
+		int target_node = 0;  // DRAM node
+		int ret = migrate_pages(&l_hold, ktmm_alloc_migration_target,
+				NULL, (unsigned long)&target_node, MIGRATE_SYNC, MR_MEMORY_HOTPLUG, &succeeded);
+		nr_migrated = (ret < 0 ? 0 : nr_taken - ret);
+		__mod_node_page_state(pgdat, NR_PROMOTED, nr_migrated);
+
+		pr_debug("pgdat %d migrated %lu folios from promote list", nid, nr_migrated);
+	}
 	spin_lock_irq(&lruvec->lru_lock);
 
 	ktmm_move_folios_to_lru(lruvec, &l_hold);
@@ -731,30 +720,15 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	}
 
 	//migrate pages down to the pmem node
-	// if (pgdat->pm_node == 0 && pmem_node_id != -1) {
-	// 	unsigned int succeeded;
-	// 	int ret = migrate_pages(&folio_list, alloc_pmem_page, NULL, 
-	// 				0, MIGRATE_SYNC, MR_MEMORY_HOTPLUG, &succeeded);
-	// 	nr_migrated = (ret >= 0 ? nr_taken - ret : 0);
-	// 	pr_debug("pgdat %d migrated %lu folios from inactive list", nid, nr_migrated);
-	// 	__mod_node_page_state(pgdat, NR_DEMOTED, nr_reclaimed);
-	// }
-//dummy code
-  // if (pgdat->pm_node == 0 && pmem_node_id != -1) {
-  //   nr_migrated = 0;  // No migration actually happens
-  //   // pr_debug("pgdat %d MIGRATION DISABLED - would have migrated %lu folios from inactive list", nid, nr_taken);
-  // }
-  // Demote cold pages from DRAM (node 0) down to PMEM (node 1)
-	// Demote cold pages from DRAM (node 0) down to PMEM (node 1)
-// Demote cold pages from DRAM (node 0) down to PMEM (node 1)
-if (pgdat->pm_node == 0 && pmem_node_id != -1) {
-	unsigned int succeeded;
-	int ret = migrate_pages(&folio_list, alloc_migration_target, NULL, 
-				0, MIGRATE_SYNC, MR_MEMORY_HOTPLUG, &succeeded);
-	nr_migrated = (ret >= 0 ? nr_taken - ret : 0);
-	pr_debug("pgdat %d migrated %lu folios from inactive list", nid, nr_migrated);
-	__mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
-}
+	if (pgdat->pm_node == 0 && pmem_node_id != -1) {
+		unsigned int succeeded;
+		int target_node = pmem_node_id;  // PMEM node
+		int ret = migrate_pages(&folio_list, ktmm_alloc_migration_target, NULL, 
+					(unsigned long)&target_node, MIGRATE_SYNC, MR_MEMORY_HOTPLUG, &succeeded);
+		nr_migrated = (ret >= 0 ? nr_taken - ret : 0);
+		pr_debug("pgdat %d migrated %lu folios from inactive list", nid, nr_migrated);
+		__mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
+	}
   
 	spin_lock_irq(&lruvec->lru_lock);
 
