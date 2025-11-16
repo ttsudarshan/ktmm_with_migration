@@ -242,8 +242,8 @@ static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, co
     
     if (was_accessed) {
         /* Print the access information */
-        // printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, jiffies=%lu) ***\n", 
-        //          location, folio, node_type, jiffies);
+        printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, jiffies=%lu) ***\n", 
+                 location, folio, node_type, jiffies);
         
         /* Immediately clear the bit after printing so we don't print it again in the same scan */
         folio_clear_referenced(folio);
@@ -463,7 +463,7 @@ static int ktmm_migrate_folio_manual(struct folio *folio, int target_node, struc
 	
 	// Try migration via mapping->a_ops->migratepage if available (migration.c line 153)
 	if (mapping->a_ops && mapping->a_ops->migrate_folio) {
-		rc = mapping->a_ops->migrate_folio(mapping, folio_folio(newpage), folio, MIGRATE_SYNC);
+		rc = mapping->a_ops->migrate_folio(mapping, page_folio(newpage), folio, MIGRATE_SYNC);
 		
 		if (rc == MIGRATEPAGE_SUCCESS) {
 			// Success! Don't free newpage, ownership transferred
@@ -571,7 +571,7 @@ static void scan_promote_list(unsigned long nr_to_scan,
 		nr_migrated = migrated_count;
 		if (nr_migrated > 0) {
 			__mod_node_page_state(pgdat, NR_PROMOTED, nr_migrated);
-			pr_info("pgdat %d PROMOTED %d folios from PMEM to DRAM", nid, nr_migrated);
+			pr_info("pgdat %d PROMOTED %lu folios from PMEM to DRAM", nid, nr_migrated);
 		}
 	}
 	spin_lock_irq(&lruvec->lru_lock);
@@ -805,7 +805,7 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 		nr_migrated = migrated_count;
 		if (nr_migrated > 0) {
 			__mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
-			pr_info("pgdat %d DEMOTED %d folios from DRAM to PMEM", nid, nr_migrated);
+			pr_info("pgdat %d DEMOTED %lu folios from DRAM to PMEM", nid, nr_migrated);
 		}
 	}
   
