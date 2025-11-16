@@ -213,6 +213,7 @@ static int ktmm_folio_referenced(struct folio *folio, int is_locked,
 	return pt_folio_referenced(folio, is_locked, memcg, vm_flags);
 }
 
+
 /*****************************************************************************
  * Page Access Tracking Helper Functions
  *****************************************************************************/
@@ -241,15 +242,16 @@ static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, co
     
     if (was_accessed) {
         /* Print the access information */
-        printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, jiffies=%lu) ***\n", 
-                 location, folio, node_type, jiffies);
+        // printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, jiffies=%lu) ***\n", 
+        //          location, folio, node_type, jiffies);
         
         /* Immediately clear the bit after printing so we don't print it again in the same scan */
         folio_clear_referenced(folio);
-    } else {
-        printk(KERN_INFO "Not accessed at %s: referenced_bit=0 (folio=%p, node=%s, jiffies=%lu)\n", 
-                 location, folio, node_type, jiffies);
-    }
+    } 
+    //else {
+    //     printk(KERN_INFO "Not accessed at %s: referenced_bit=0 (folio=%p, node=%s, jiffies=%lu)\n", 
+    //              location, folio, node_type, jiffies);
+    // }
     
     return was_accessed;
 }
@@ -424,6 +426,67 @@ static inline bool ktmm_folio_needs_release(struct folio *folio)
 	return folio_has_private(folio) || (mapping && mapping_release_always(mapping));
 }
 
+/**
+ * ktmm_migrate_folio_manual - manually migrate a single folio to target node
+ * Following the exact pattern from migration.c for kernel 5.3
+ * 
+ * @folio: folio to migrate
+ * @target_node: destination NUMA node
+ * @pgdat: page data structure
+ *
+ * Returns: 0 on success, negative error code on failure
+ */
+static int ktmm_migrate_folio_manual(struct folio *folio, int target_node, struct pglist_data *pgdat)
+{
+	struct page *page = &folio->page;
+	struct page *newpage = NULL;
+	struct address_space *mapping;
+	int rc = -EINVAL;
+	
+	// Get the mapping (similar to migration.c line 93)
+	mapping = folio_mapping(folio);
+	if (!mapping) {
+		// No mapping, can't migrate
+		return -EINVAL;
+	}
+	
+	// Check if page is suitable for migration (basic checks from migration.c)
+	if (folio_test_unevictable(folio)) {
+		return -EINVAL;
+	}
+	
+	// Allocate new page on target node (migration.c line 146)
+	newpage = alloc_pages_node(target_node, GFP_HIGHUSER_MOVABLE, 0);
+	if (!newpage) {
+		return -ENOMEM;
+	}
+	
+	// Try migration via mapping->a_ops->migratepage if available (migration.c line 153)
+	if (mapping->a_ops && mapping->a_ops->migrate_folio) {
+		rc = mapping->a_ops->migrate_folio(mapping, page_folio(newpage), folio, MIGRATE_SYNC);
+		
+		if (rc == MIGRATEPAGE_SUCCESS) {
+			// Success! Don't free newpage, ownership transferred
+			return 0;
+		} else {
+			// Failed, free newpage and return error
+			__free_pages(newpage, 0);
+			return rc;
+		}
+	}
+	
+	// If no migrate_folio operation, free newpage and fail
+	__free_pages(newpage, 0);
+	return -ENOSYS;
+}
+
+/**
+ * ktmm_alloc_migration_target - allocate page on target node for migration
+ * @page: page being migrated (not used)
+ * @private: pointer to target node ID
+ *
+ * Returns newly allocated page on target node
+ */
 
 /**
  * scan_promote_list - scan promote lru folios for migration
@@ -457,7 +520,7 @@ static void scan_promote_list(unsigned long nr_to_scan,
 	struct list_head *src = &lruvec->lists[lru];
 
 	if (list_empty(src))
-		pr_debug("promote list empty");
+		// pr_debug("promote list empty");
 
 	//pr_debug("scanning promote list");
 
@@ -474,36 +537,43 @@ static void scan_promote_list(unsigned long nr_to_scan,
 
 	spin_unlock_irq(&lruvec->lru_lock);
 
-	pr_debug("pgdat %d scanned %lu on promote list", nid, nr_scanned);
-	pr_debug("pgdat %d taken %lu on promote list", nid, nr_taken);
+	// pr_debug("pgdat %d scanned %lu on promote list", nid, nr_scanned);
+	// pr_debug("pgdat %d taken %lu on promote list", nid, nr_taken);
 
 	/* ADDED: Track access patterns for each folio in promote list */
-	if (!list_empty(&l_hold)) {
+	// DISABLED: Too much console output
+	// if (!list_empty(&l_hold)) {
+	// 	struct folio *folio, *next;
+	// 	
+	// 	list_for_each_entry_safe(folio, next, &l_hold, lru) {
+	// 		/* Track access pattern for debugging/monitoring */
+	// 		track_folio_access(folio, pgdat, "PROMOTE_LIST");
+	// 	}
+	// }
+
+	// Manual migration folio by folio
+	// Migrate page-by-page from PMEM to DRAM
+	if (nr_taken > 0) {
 		struct folio *folio, *next;
+		int target_node = 0;  // DRAM node
+		int migrated_count = 0;
 		
 		list_for_each_entry_safe(folio, next, &l_hold, lru) {
-			/* Track access pattern for debugging/monitoring */
-			track_folio_access(folio, pgdat, "PROMOTE_LIST");
+			int rc = ktmm_migrate_folio_manual(folio, target_node, pgdat);
+			if (rc == 0) {
+				migrated_count++;
+				// Remove from list since migration succeeded
+				list_del(&folio->lru);
+			}
+			// If migration fails, leave it in list to be put back
+		}
+		
+		nr_migrated = migrated_count;
+		if (nr_migrated > 0) {
+			__mod_node_page_state(pgdat, NR_PROMOTED, nr_migrated);
+			pr_info("pgdat %d PROMOTED %lu folios from PMEM to DRAM", nid, nr_migrated);
 		}
 	}
-
-	// if (nr_taken) {
-	// 	unsigned int succeeded;
-	// 	int ret = migrate_pages(&l_hold, alloc_normal_page,
-	// 			NULL, 0, MIGRATE_SYNC, MR_MEMORY_HOTPLUG, &succeeded);
-	// 	nr_migrated = (ret < 0 ? 0 : nr_taken - ret);
-	// 	__mod_node_page_state(pgdat, NR_PROMOTED, nr_migrated);
-
-	// 	pr_debug("pgdat %d migrated %lu folios from promote list", nid, nr_migrated);
-	// }
-  
-
-  //dummy code
-  if (nr_taken) {
-    nr_migrated = 0;  // No migration actually happens
-    pr_debug("pgdat %d MIGRATION DISABLED - would have migrated %lu folios from promote list", nid, nr_taken);
-  }
-
 	spin_lock_irq(&lruvec->lru_lock);
 
 	ktmm_move_folios_to_lru(lruvec, &l_hold);
@@ -591,7 +661,7 @@ static void scan_active_list(unsigned long nr_to_scan,
 		if (pgdat->pm_node != 0) {
 			//pr_debug("active pm_node");
 			if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
-				pr_debug("set promote");
+				// pr_debug("set promote");
 				//SetPagePromote(page); NEEDS TO BE MODULE TRACKED
 				folio_set_promote(folio);
 				list_add(&folio->lru, &l_promote);
@@ -639,9 +709,9 @@ static void scan_active_list(unsigned long nr_to_scan,
 	nr_deactivate = ktmm_move_folios_to_lru(lruvec, &l_inactive);
 	nr_promote = ktmm_move_folios_to_lru(lruvec, &l_promote);
 
-	pr_debug("pgdat %d folio activated: %d", nid, nr_activate);
-	pr_debug("pgdat %d folio deactivated: %d", nid, nr_deactivate);
-	pr_debug("pgdat %d folio promoted: %d", nid, nr_promote);
+	// pr_debug("pgdat %d folio activated: %d", nid, nr_activate);
+	// pr_debug("pgdat %d folio deactivated: %d", nid, nr_deactivate);
+	// pr_debug("pgdat %d folio promoted: %d", nid, nr_promote);
 
 	// Keep all free folios in l_active list
 	list_splice(&l_inactive, &l_active);
@@ -704,30 +774,41 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	if (nr_taken == 0) return 0;
 
 	/* ADDED: Track access patterns for each folio in inactive list */
-	if (!list_empty(&folio_list)) {
-		struct folio *folio, *next;
-		
-		list_for_each_entry_safe(folio, next, &folio_list, lru) {
-			/* Track access pattern for debugging/monitoring */
-			track_folio_access(folio, pgdat, "INACTIVE_LIST");
-		}
-	}
+	// DISABLED: Too much console output
+	// if (!list_empty(&folio_list)) {
+	// 	struct folio *folio, *next;
+	// 	
+	// 	list_for_each_entry_safe(folio, next, &folio_list, lru) {
+	// 		/* Track access pattern for debugging/monitoring */
+	// 		track_folio_access(folio, pgdat, "INACTIVE_LIST");
+	// 	}
+	// }
 
 	//migrate pages down to the pmem node
-	// if (pgdat->pm_node == 0 && pmem_node_id != -1) {
-	// 	unsigned int succeeded;
-	// 	int ret = migrate_pages(&folio_list, alloc_pmem_page, NULL, 
-	// 				0, MIGRATE_SYNC, MR_MEMORY_HOTPLUG, &succeeded);
-	// 	nr_migrated = (ret >= 0 ? nr_taken - ret : 0);
-	// 	pr_debug("pgdat %d migrated %lu folios from inactive list", nid, nr_migrated);
-	// 	__mod_node_page_state(pgdat, NR_DEMOTED, nr_reclaimed);
-	// }
-//dummy code
-  if (pgdat->pm_node == 0 && pmem_node_id != -1) {
-    nr_migrated = 0;  // No migration actually happens
-    pr_debug("pgdat %d MIGRATION DISABLED - would have migrated %lu folios from inactive list", nid, nr_taken);
-  }
-
+	// Manual migration following migration.c pattern
+	// Migrate page-by-page from DRAM to PMEM
+	if (pgdat->pm_node == 0 && pmem_node_id != -1) {
+		struct folio *folio, *next;
+		int target_node = pmem_node_id;  // PMEM node
+		int migrated_count = 0;
+		
+		list_for_each_entry_safe(folio, next, &folio_list, lru) {
+			int rc = ktmm_migrate_folio_manual(folio, target_node, pgdat);
+			if (rc == 0) {
+				migrated_count++;
+				// Remove from list since migration succeeded
+				list_del(&folio->lru);
+			}
+			// If migration fails, leave it in list to be put back
+		}
+		
+		nr_migrated = migrated_count;
+		if (nr_migrated > 0) {
+			__mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
+			pr_info("pgdat %d DEMOTED %lu folios from DRAM to PMEM", nid, nr_migrated);
+		}
+	}
+  
 	spin_lock_irq(&lruvec->lru_lock);
 
 	ktmm_move_folios_to_lru(lruvec, &folio_list);
@@ -789,12 +870,13 @@ static void scan_node(pg_data_t *pgdat,
 	struct mem_cgroup *memcg;
 	int nid = pgdat->node_id;
 	int memcg_count;
-	ktime_t start_time, end_time;
-	s64 scan_duration_ns;
-	const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
+	
+	/* Timing and page count tracking */
+	u64 scan_start_time, scan_end_time;
+	u64 total_scan_time_us;
+	unsigned long total_pages_scanned = 0;
 
-	/* Start timing - capture time before any scanning operations */
-	start_time = ktime_get();
+	scan_start_time = ktime_get_ns();
 
 	memset(&sc->nr, 0, sizeof(sc->nr));
 	memcg = ktmm_mem_cgroup_iter(NULL, NULL, reclaim);
@@ -833,19 +915,21 @@ static void scan_node(pg_data_t *pgdat,
 		scanned = sc->nr_scanned;
 
 		for_each_evictable_lru(lru) {
-			unsigned long nr_to_scan = ULONG_MAX;  //sudarshan changed this to 256 for better page access detection
+			unsigned long nr_to_scan = 1024;  //3000000//sudarshan changed this to 256 for better page access detection
 
 			scan_list(lru, nr_to_scan, lruvec, sc, pgdat);
+			
+			/* Track total pages scanned across all LRU lists */
+			total_pages_scanned += nr_to_scan;
 		}
 	} while ((memcg = ktmm_mem_cgroup_iter(NULL, memcg, NULL)));
-
-	/* End timing - capture time after all scanning is complete */
-	end_time = ktime_get();
-	scan_duration_ns = ktime_to_ns(ktime_sub(end_time, start_time));
-
-	/* Print the timing result (this is OUTSIDE the timed section) */
-	printk(KERN_INFO "=== SCAN TIMING: Node %d (%s) completed scan in %lld nanoseconds (%lld microseconds) ===\n",
-	       nid, node_type, scan_duration_ns, scan_duration_ns / 1000);
+	
+	/* Calculate and print scan statistics */
+	scan_end_time = ktime_get_ns();
+	total_scan_time_us = (scan_end_time - scan_start_time) / 1000;  /* Convert nanoseconds to microseconds */
+	
+	printk(KERN_INFO "*** SCAN_STATS (Node %d): Total Pages Scanned: %lu, Total Scan Time: %llu us ***\n", 
+	       nid, total_pages_scanned, total_scan_time_us);
 }
 
 
