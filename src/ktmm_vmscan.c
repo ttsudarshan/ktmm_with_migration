@@ -432,12 +432,6 @@ static inline bool ktmm_folio_needs_release(struct folio *folio)
  *
  * Returns newly allocated page on target node
  */
-static struct page *ktmm_alloc_migration_target(struct page *page, unsigned long private)
-{
-	int nid = *(int *)private;
-	return alloc_pages_node(nid, GFP_HIGHUSER_MOVABLE, 0);
-}
-
 
 /**
  * scan_promote_list - scan promote lru folios for migration
