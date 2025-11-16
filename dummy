@@ -1,0 +1,36 @@
+/**
+ * track_folio_access - track if folio was previously accessed
+ * 
+ * @folio: folio to check
+ * @pgdat: node data to determine node type
+ * @location: descriptive string for logging context
+ * 
+ * Returns: 1 if page was previously accessed, 0 if first access
+ * 
+ * This function only checks the referenced flag WITHOUT clearing it,
+ * so we can monitor access patterns without affecting kernel behavior.
+ */
+static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, const char *location)
+{
+    int was_accessed;
+    const char *node_type;
+    
+    /* Determine node type for logging */
+    if (pgdat->pm_node == 0) {
+        node_type = "DRAM";
+    } else {
+        node_type = "PMEM";
+    }
+    
+    /* 
+     * Just check the flag without clearing - purely for monitoring
+     * Returns: 1 if accessed since last check, 0 if not accessed
+     */
+    was_accessed = folio_test_referenced(folio);
+    
+    /* Log the access pattern for monitoring */
+    printk(KERN_INFO "Page access tracking at %s: folio=%p, node_type=%s, was_accessed=%d\n", 
+             location, folio, node_type, was_accessed);
+    
+    return was_accessed;
+}

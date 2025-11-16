@@ -1,0 +1,1515 @@
+[ 1385.093466] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000065455a7, node=DRAM)
+[ 1385.093466] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000099676638, node=PMEM)
+[ 1385.093467] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d6bcd767, node=DRAM)
+[ 1385.093468] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000007f98de2f, node=PMEM)
+[ 1385.093469] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000007a7a7ad7, node=DRAM)
+[ 1385.093469] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000017dd5b22, node=PMEM)
+[ 1385.093470] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c8b9faf7, node=PMEM)
+[ 1385.093470] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005f86ab12, node=DRAM)
+[ 1385.093471] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000084a3a7fd, node=DRAM)
+[ 1385.093471] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000dcfb2641, node=PMEM)
+[ 1385.093472] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000cc524a91, node=DRAM)
+[ 1385.093473] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000f8dfc1fe, node=PMEM)
+[ 1385.093473] pgdat 0 MIGRATION DISABLED - would have migrated 32 folios from inactive list
+[ 1385.093474] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004f9b124f, node=PMEM)
+[ 1385.093475] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000008dcdae15, node=PMEM)
+[ 1385.093476] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000eb1536fe, node=PMEM)
+[ 1385.093477] pgdat 0 folio activated: 0
+[ 1385.093477] pgdat 0 folio deactivated: 0
+[ 1385.093478] pgdat 0 folio promoted: 0
+[ 1385.093478] pgdat 1 folio activated: 0
+[ 1385.093478] promote list empty
+[ 1385.093479] pgdat 1 folio deactivated: 0
+[ 1385.093480] pgdat 0 scanned 0 on promote list
+[ 1385.093481] pgdat 1 folio promoted: 0
+[ 1385.093481] promote list empty
+[ 1385.093482] pgdat 0 taken 0 on promote list
+[ 1385.093482] pgdat 1 scanned 0 on promote list
+[ 1385.093483] pgdat 1 taken 0 on promote list
+[ 1385.093484] pgdat 0 folio activated: 0
+[ 1385.093484] pgdat 1 folio activated: 0
+[ 1385.093485] pgdat 0 folio deactivated: 0
+[ 1385.093486] pgdat 1 folio deactivated: 0
+[ 1385.093487] pgdat 0 folio promoted: 0
+[ 1385.093487] pgdat 1 folio promoted: 0
+[ 1385.093488] promote list empty
+[ 1385.093489] pgdat 1 scanned 0 on promote list
+[ 1385.093489] promote list empty
+[ 1385.093490] pgdat 1 taken 0 on promote list
+[ 1385.093490] pgdat 0 scanned 0 on promote list
+[ 1385.093492] pgdat 0 taken 0 on promote list
+[ 1385.093492] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b0ef1b7b, node=PMEM)
+[ 1385.093493] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000bb811267, node=PMEM)
+[ 1385.093494] pgdat 1 folio activated: 0
+[ 1385.093494] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003ca226ff, node=DRAM)
+[ 1385.093495] pgdat 1 folio deactivated: 0
+[ 1385.093496] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000b99456a, node=DRAM)
+[ 1385.093497] pgdat 1 folio promoted: 0
+[ 1385.093497] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ac7a0c09, node=DRAM)
+[ 1385.093498] promote list empty
+[ 1385.093499] pgdat 1 scanned 0 on promote list
+[ 1385.093499] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000ed4e18b, node=DRAM)
+[ 1385.093500] pgdat 1 taken 0 on promote list
+[ 1385.093501] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b38bb239, node=DRAM)
+[ 1385.093502] pgdat 1 folio activated: 0
+[ 1385.093502] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000007de4ba64, node=DRAM)
+[ 1385.093503] pgdat 1 folio deactivated: 0
+[ 1385.093503] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000009ccb94d5, node=DRAM)
+[ 1385.093504] pgdat 1 folio promoted: 0
+[ 1385.093505] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000002fcca641, node=DRAM)
+[ 1385.093506] promote list empty
+[ 1385.093506] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000bc2e4bca, node=DRAM)
+[ 1385.093507] pgdat 1 scanned 0 on promote list
+[ 1385.093508] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ceaca9b3, node=DRAM)
+[ 1385.093508] pgdat 1 taken 0 on promote list
+[ 1385.093509] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000009581645e, node=DRAM)
+[ 1385.093510] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b1d7bce7, node=DRAM)
+[ 1385.093511] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000006fc09022, node=DRAM)
+[ 1385.093511] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d84303aa, node=DRAM)
+[ 1385.093512] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000658fd079, node=DRAM)
+[ 1385.093512] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004ed5fa30, node=DRAM)
+[ 1385.093512] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a45ce240, node=PMEM)
+[ 1385.093513] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000f75fd7b0, node=DRAM)
+[ 1385.093514] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000045288a90, node=PMEM)
+[ 1385.093514] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003d0a82b8, node=DRAM)
+[ 1385.093515] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000aab4d09b, node=PMEM)
+[ 1385.093515] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c05bfd14, node=DRAM)
+[ 1385.093516] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000013044928, node=PMEM)
+[ 1385.093517] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000fc0e275b, node=DRAM)
+[ 1385.093518] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000006a21998c, node=PMEM)
+[ 1385.093518] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b2b59c47, node=DRAM)
+[ 1385.093519] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a8ba81be, node=PMEM)
+[ 1385.093520] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a072bb06, node=DRAM)
+[ 1385.093520] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004b884bad, node=PMEM)
+[ 1385.093521] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004e6f735a, node=DRAM)
+[ 1385.093522] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a8d871df, node=PMEM)
+[ 1385.093522] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000042e63333, node=PMEM)
+[ 1385.093522] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000476753fe, node=DRAM)
+[ 1385.093523] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000071056562, node=PMEM)
+[ 1385.093524] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000064cacbef, node=DRAM)
+[ 1385.093525] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000bb3d80c6, node=PMEM)
+[ 1385.093525] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000007184b26a, node=DRAM)
+[ 1385.093526] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c1b8c2ef, node=PMEM)
+[ 1385.093526] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000028a77e97, node=DRAM)
+[ 1385.093527] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000070055afe, node=DRAM)
+[ 1385.093528] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005e516c1c, node=PMEM)
+[ 1385.093529] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d0c02b14, node=DRAM)
+[ 1385.093529] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d40daf46, node=PMEM)
+[ 1385.093530] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005ce05be5, node=DRAM)
+[ 1385.093531] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a5b49714, node=PMEM)
+[ 1385.093532] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000008956f9d4, node=DRAM)
+[ 1385.093532] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e964fe2d, node=PMEM)
+[ 1385.093533] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000081fd183d, node=DRAM)
+[ 1385.093534] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004fad6058, node=PMEM)
+[ 1385.093535] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000de457ab6, node=PMEM)
+[ 1385.093535] pgdat 0 MIGRATION DISABLED - would have migrated 32 folios from inactive list
+[ 1385.093536] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000708651bd, node=PMEM)
+[ 1385.093537] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000056107258, node=PMEM)
+[ 1385.093538] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c53cba2e, node=PMEM)
+[ 1385.093538] pgdat 0 folio activated: 0
+[ 1385.093538] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000002de1cffb, node=PMEM)
+[ 1385.093539] pgdat 0 folio deactivated: 0
+[ 1385.093540] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ce97ec51, node=PMEM)
+[ 1385.093541] pgdat 0 folio promoted: 0
+[ 1385.093542] promote list empty
+[ 1385.093542] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000027e47379, node=PMEM)
+[ 1385.093543] pgdat 0 scanned 0 on promote list
+[ 1385.093544] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000006b74faca, node=PMEM)
+[ 1385.093547] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000009e99f61c, node=PMEM)
+[ 1385.093547] pgdat 0 taken 0 on promote list
+[ 1385.093549] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c21033dd, node=PMEM)
+[ 1385.093550] pgdat 0 folio activated: 0
+[ 1385.093550] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000008e788cb3, node=PMEM)
+[ 1385.093551] pgdat 0 folio deactivated: 0
+[ 1385.093552] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004937147e, node=PMEM)
+[ 1385.093552] pgdat 0 folio promoted: 0
+[ 1385.093553] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b2342b06, node=PMEM)
+[ 1385.093553] promote list empty
+[ 1385.093554] pgdat 0 scanned 0 on promote list
+[ 1385.093555] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000be831ec5, node=PMEM)
+[ 1385.093556] pgdat 0 taken 0 on promote list
+[ 1385.093556] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000de5615ae, node=PMEM)
+[ 1385.093559] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000004ded028, node=DRAM)
+[ 1385.093559] pgdat 1 folio activated: 0
+[ 1385.093560] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000c8b27ec, node=DRAM)
+[ 1385.093560] pgdat 1 folio deactivated: 0
+[ 1385.093561] pgdat 1 folio promoted: 0
+[ 1385.093562] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000008321e2ac, node=DRAM)
+[ 1385.093563] promote list empty
+[ 1385.093563] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000008742d320, node=DRAM)
+[ 1385.093564] pgdat 1 scanned 0 on promote list
+[ 1385.093564] pgdat 1 taken 0 on promote list
+[ 1385.093565] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000925da903, node=DRAM)
+[ 1385.093566] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000fe7b4b9e, node=DRAM)
+[ 1385.093567] pgdat 1 folio activated: 0
+[ 1385.093567] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000028b116b0, node=DRAM)
+[ 1385.093568] pgdat 1 folio deactivated: 0
+[ 1385.093569] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000672f8cc9, node=DRAM)
+[ 1385.093569] pgdat 1 folio promoted: 0
+[ 1385.093570] promote list empty
+[ 1385.093570] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000598040db, node=DRAM)
+[ 1385.093572] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000027b443e8, node=DRAM)
+[ 1385.093572] pgdat 1 scanned 0 on promote list
+[ 1385.093573] pgdat 1 taken 0 on promote list
+[ 1385.093573] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000925e32a5, node=DRAM)
+[ 1385.093574] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000284779a0, node=DRAM)
+[ 1385.093575] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000392c5d9c, node=DRAM)
+[ 1385.093575] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d19c24d3, node=PMEM)
+[ 1385.093575] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ac2600d7, node=DRAM)
+[ 1385.093577] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000cf68785e, node=DRAM)
+[ 1385.093577] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004a91ab05, node=PMEM)
+[ 1385.093578] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000f8f3341, node=DRAM)
+[ 1385.093578] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ffc030d1, node=PMEM)
+[ 1385.093579] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000046aa6f73, node=DRAM)
+[ 1385.093579] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000fdd0aaaf, node=PMEM)
+[ 1385.093581] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000004c172a2, node=DRAM)
+[ 1385.093581] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000009e4f3c59, node=PMEM)
+[ 1385.093582] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a8ca1dcf, node=DRAM)
+[ 1385.093583] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e8cf235c, node=PMEM)
+[ 1385.093584] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d31ee001, node=DRAM)
+[ 1385.093584] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d93f9ab6, node=PMEM)
+[ 1385.093585] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000790959f, node=DRAM)
+[ 1385.093586] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e113129b, node=PMEM)
+[ 1385.093586] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c9c98b26, node=DRAM)
+[ 1385.093587] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005653586f, node=PMEM)
+[ 1385.093588] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000fe45a489, node=DRAM)
+[ 1385.093588] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000007df5234e, node=PMEM)
+[ 1385.093589] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a4f6d56a, node=DRAM)
+[ 1385.093590] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000f1d95754, node=PMEM)
+[ 1385.093590] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000bc2b2cd, node=DRAM)
+[ 1385.093591] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003795792e, node=PMEM)
+[ 1385.093592] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000fa6fe54d, node=DRAM)
+[ 1385.093592] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000084d3b2c4, node=PMEM)
+[ 1385.093593] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000bb22f05c, node=DRAM)
+[ 1385.093593] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003f103b49, node=PMEM)
+[ 1385.093594] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000028e8a405, node=DRAM)
+[ 1385.093595] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000001b05c2b4, node=PMEM)
+[ 1385.093595] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b659637c, node=DRAM)
+[ 1385.093596] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000043eea5ec, node=PMEM)
+[ 1385.093597] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c47a7262, node=DRAM)
+[ 1385.093597] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000098c9a60, node=PMEM)
+[ 1385.093598] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004685f3cd, node=DRAM)
+[ 1385.093599] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000754aad2c, node=PMEM)
+[ 1385.093600] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000095a906d8, node=DRAM)
+[ 1385.093600] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a7a2b919, node=PMEM)
+[ 1385.093601] pgdat 0 MIGRATION DISABLED - would have migrated 32 folios from inactive list
+[ 1385.093602] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b3c6cf22, node=PMEM)
+[ 1385.093603] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003d043390, node=PMEM)
+[ 1385.093604] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000df9fd755, node=PMEM)
+[ 1385.093604] pgdat 0 folio activated: 0
+[ 1385.093604] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000064d5eb4a, node=PMEM)
+[ 1385.093605] pgdat 0 folio deactivated: 0
+[ 1385.093606] pgdat 0 folio promoted: 0
+[ 1385.093606] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005ad4ef9d, node=PMEM)
+[ 1385.093607] promote list empty
+[ 1385.093607] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000dd0124cd, node=PMEM)
+[ 1385.093608] pgdat 0 scanned 0 on promote list
+[ 1385.093609] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000009339fc7f, node=PMEM)
+[ 1385.093609] pgdat 0 taken 0 on promote list
+[ 1385.093611] pgdat 0 folio activated: 0
+[ 1385.093611] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000048ae94f7, node=PMEM)
+[ 1385.093612] pgdat 0 folio deactivated: 0
+[ 1385.093612] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000009bd85810, node=PMEM)
+[ 1385.093613] pgdat 0 folio promoted: 0
+[ 1385.093613] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000056927322, node=PMEM)
+[ 1385.093614] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003d737e8b, node=PMEM)
+[ 1385.093615] promote list empty
+[ 1385.093616] pgdat 0 scanned 0 on promote list
+[ 1385.093616] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000dd6c663d, node=PMEM)
+[ 1385.093617] pgdat 0 taken 0 on promote list
+[ 1385.093618] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000076d74f2b, node=PMEM)
+[ 1385.093619] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b1b32f7b, node=DRAM)
+[ 1385.093620] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005a199938, node=DRAM)
+[ 1385.093620] pgdat 1 folio activated: 0
+[ 1385.093621] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000f11290f2, node=DRAM)
+[ 1385.093621] pgdat 1 folio deactivated: 0
+[ 1385.093622] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000077341742, node=DRAM)
+[ 1385.093623] pgdat 1 folio promoted: 0
+[ 1385.093624] promote list empty
+[ 1385.093624] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000002d7c6d19, node=DRAM)
+[ 1385.093625] pgdat 1 scanned 0 on promote list
+[ 1385.093626] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ffe8f94d, node=DRAM)
+[ 1385.093626] pgdat 1 taken 0 on promote list
+[ 1385.093627] pgdat 1 folio activated: 0
+[ 1385.093627] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000aa5c98ec, node=DRAM)
+[ 1385.093628] pgdat 1 folio deactivated: 0
+[ 1385.093629] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b227dc44, node=DRAM)
+[ 1385.093629] pgdat 1 folio promoted: 0
+[ 1385.093630] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000474f170d, node=DRAM)
+[ 1385.093630] promote list empty
+[ 1385.093632] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000099612c6, node=DRAM)
+[ 1385.093632] pgdat 1 scanned 0 on promote list
+[ 1385.093633] pgdat 1 taken 0 on promote list
+[ 1385.093634] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000097f1d81a, node=DRAM)
+[ 1385.093635] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d50a9285, node=DRAM)
+[ 1385.093636] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000283ced79, node=PMEM)
+[ 1385.093636] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003a666495, node=DRAM)
+[ 1385.093638] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005b131a79, node=PMEM)
+[ 1385.093638] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000912e40e7, node=DRAM)
+[ 1385.093639] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000009f64bd3d, node=PMEM)
+[ 1385.093640] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000472bb0bb, node=DRAM)
+[ 1385.093640] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a92c74fd, node=PMEM)
+[ 1385.093641] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000acaba6c7, node=DRAM)
+[ 1385.093642] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004ed6cdf5, node=PMEM)
+[ 1385.093643] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e196b3d8, node=DRAM)
+[ 1385.093643] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000001a05b696, node=PMEM)
+[ 1385.093644] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000bcb19e9, node=DRAM)
+[ 1385.093645] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000afba7fa7, node=PMEM)
+[ 1385.093645] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c2b4291f, node=DRAM)
+[ 1385.093646] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000161644a7, node=PMEM)
+[ 1385.093647] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000d2db0c2, node=DRAM)
+[ 1385.093648] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000071a904db, node=PMEM)
+[ 1385.093649] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000f6e22915, node=DRAM)
+[ 1385.093649] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000cdd064c7, node=PMEM)
+[ 1385.093650] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000730b0249, node=DRAM)
+[ 1385.093651] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000023481eaf, node=PMEM)
+[ 1385.093651] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000070fc93a6, node=DRAM)
+[ 1385.093652] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000056f03705, node=PMEM)
+[ 1385.093653] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000001884c3de, node=DRAM)
+[ 1385.093653] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003c81564d, node=PMEM)
+[ 1385.093654] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004b16a167, node=DRAM)
+[ 1385.093655] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000141cfde5, node=PMEM)
+[ 1385.093656] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000aa9e585a, node=DRAM)
+[ 1385.093656] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000807cbb1, node=PMEM)
+[ 1385.093657] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000f6a689cd, node=DRAM)
+[ 1385.093657] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004266a274, node=PMEM)
+[ 1385.093658] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b55254e5, node=DRAM)
+[ 1385.093659] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000006088c86e, node=PMEM)
+[ 1385.093659] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005405b2f3, node=DRAM)
+[ 1385.093660] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ac1089e0, node=PMEM)
+[ 1385.093661] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b36060fe, node=DRAM)
+[ 1385.093662] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a831cd8e, node=PMEM)
+[ 1385.093662] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a5ecf4f6, node=DRAM)
+[ 1385.093663] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003808471b, node=PMEM)
+[ 1385.093664] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000be551cf, node=DRAM)
+[ 1385.093664] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000029d1fed6, node=PMEM)
+[ 1385.093665] pgdat 0 MIGRATION DISABLED - would have migrated 32 folios from inactive list
+[ 1385.093666] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a16270dc, node=PMEM)
+[ 1385.093667] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000007db5a52d, node=PMEM)
+[ 1385.093668] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000006f78e634, node=PMEM)
+[ 1385.093668] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000047e59f51, node=PMEM)
+[ 1385.093668] pgdat 0 folio activated: 0
+[ 1385.093669] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000097cf9439, node=PMEM)
+[ 1385.093670] pgdat 0 folio deactivated: 0
+[ 1385.093670] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000fcae5fc2, node=PMEM)
+[ 1385.093671] pgdat 0 folio promoted: 0
+[ 1385.093672] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000f9daaa8, node=PMEM)
+[ 1385.093672] promote list empty
+[ 1385.093673] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000052d0fb50, node=PMEM)
+[ 1385.093674] pgdat 0 scanned 0 on promote list
+[ 1385.093675] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000212c68a9, node=PMEM)
+[ 1385.093675] pgdat 0 taken 0 on promote list
+[ 1385.093676] pgdat 0 folio activated: 0
+[ 1385.093676] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004f1f77bf, node=PMEM)
+[ 1385.093677] pgdat 0 folio deactivated: 0
+[ 1385.093678] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000572cd125, node=PMEM)
+[ 1385.093678] pgdat 0 folio promoted: 0
+[ 1385.093679] promote list empty
+[ 1385.093680] pgdat 0 scanned 0 on promote list
+[ 1385.093681] pgdat 0 taken 0 on promote list
+[ 1385.093681] pgdat 1 folio activated: 0
+[ 1385.093682] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000dc31ee6a, node=DRAM)
+[ 1385.093682] pgdat 1 folio deactivated: 0
+[ 1385.093684] pgdat 1 folio promoted: 0
+[ 1385.093684] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e9b8a395, node=DRAM)
+[ 1385.093685] promote list empty
+[ 1385.093685] pgdat 1 scanned 0 on promote list
+[ 1385.093686] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000eae56dfb, node=DRAM)
+[ 1385.093687] pgdat 1 taken 0 on promote list
+[ 1385.093687] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000007f32e34b, node=DRAM)
+[ 1385.093688] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003d1960dd, node=DRAM)
+[ 1385.093688] pgdat 1 folio activated: 0
+[ 1385.093689] pgdat 0 MIGRATION DISABLED - would have migrated 5 folios from inactive list
+[ 1385.093690] pgdat 1 folio deactivated: 0
+[ 1385.093691] pgdat 1 folio promoted: 0
+[ 1385.093691] pgdat 0 folio activated: 0
+[ 1385.093692] pgdat 0 folio deactivated: 0
+[ 1385.093692] promote list empty
+[ 1385.093693] pgdat 1 scanned 0 on promote list
+[ 1385.093693] pgdat 0 folio promoted: 0
+[ 1385.093694] promote list empty
+[ 1385.093695] pgdat 1 taken 0 on promote list
+[ 1385.093696] pgdat 0 scanned 0 on promote list
+[ 1385.093696] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000006ad7cfb7, node=PMEM)
+[ 1385.093697] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000901edd7d, node=PMEM)
+[ 1385.093697] pgdat 0 taken 0 on promote list
+[ 1385.093698] pgdat 1 folio activated: 0
+[ 1385.093699] pgdat 0 folio activated: 0
+[ 1385.093700] pgdat 0 folio deactivated: 0
+[ 1385.093700] pgdat 1 folio deactivated: 0
+[ 1385.093701] pgdat 1 folio promoted: 0
+[ 1385.093701] pgdat 0 folio promoted: 0
+[ 1385.093702] promote list empty
+[ 1385.093702] promote list empty
+[ 1385.093703] pgdat 1 scanned 0 on promote list
+[ 1385.093703] pgdat 0 scanned 0 on promote list
+[ 1385.093704] pgdat 1 taken 0 on promote list
+[ 1385.093705] pgdat 0 taken 0 on promote list
+[ 1385.093705] pgdat 1 folio activated: 0
+[ 1385.093707] pgdat 1 folio deactivated: 0
+[ 1385.093707] pgdat 1 folio promoted: 0
+[ 1385.093708] promote list empty
+[ 1385.093708] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004b9b4438, node=DRAM)
+[ 1385.093709] pgdat 1 scanned 0 on promote list
+[ 1385.093710] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e608a7a7, node=DRAM)
+[ 1385.093711] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000008f07972, node=DRAM)
+[ 1385.093711] pgdat 1 taken 0 on promote list
+[ 1385.093712] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000018fe5c76, node=DRAM)
+[ 1385.093713] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000065ec8523, node=DRAM)
+[ 1385.093714] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000310b30d7, node=DRAM)
+[ 1385.093714] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000001d0cf2c0, node=DRAM)
+[ 1385.093715] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000f450fdc1, node=PMEM)
+[ 1385.093715] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000083689196, node=DRAM)
+[ 1385.093716] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003f77fa41, node=DRAM)
+[ 1385.093716] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000cc1a94ee, node=PMEM)
+[ 1385.093718] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000327b4003, node=PMEM)
+[ 1385.093718] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005c49840f, node=DRAM)
+[ 1385.093719] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000cebf255f, node=DRAM)
+[ 1385.093719] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000043b48dff, node=PMEM)
+[ 1385.093720] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c575a3e4, node=PMEM)
+[ 1385.093721] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005c3d696a, node=DRAM)
+[ 1385.093722] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d451b0a2, node=DRAM)
+[ 1385.093722] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000fc2ee76, node=PMEM)
+[ 1385.093723] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000027adb708, node=DRAM)
+[ 1385.093723] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000cf9abbed, node=PMEM)
+[ 1385.093725] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000f8d63545, node=PMEM)
+[ 1385.093725] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000012ac408d, node=DRAM)
+[ 1385.093726] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000abb3ddfb, node=PMEM)
+[ 1385.093726] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000001738fe1d, node=DRAM)
+[ 1385.093727] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ad461b0a, node=PMEM)
+[ 1385.093728] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e5751906, node=DRAM)
+[ 1385.093728] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000047bf06ec, node=PMEM)
+[ 1385.093729] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004e49432c, node=DRAM)
+[ 1385.093730] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e647837f, node=PMEM)
+[ 1385.093730] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003360a950, node=DRAM)
+[ 1385.093731] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000008cca1a7d, node=DRAM)
+[ 1385.093732] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000006b5bdf12, node=PMEM)
+[ 1385.093732] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000884624bf, node=DRAM)
+[ 1385.093733] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004f09e1ab, node=PMEM)
+[ 1385.093734] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000075e1ae15, node=DRAM)
+[ 1385.093734] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000000c72052, node=PMEM)
+[ 1385.093735] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003c0fdf8e, node=DRAM)
+[ 1385.093736] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000007f944689, node=PMEM)
+[ 1385.093736] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000080332dae, node=PMEM)
+[ 1385.093737] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004f1b8d44, node=DRAM)
+[ 1385.093738] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000cf0b4e41, node=PMEM)
+[ 1385.093738] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000065c2aea, node=DRAM)
+[ 1385.093739] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000008bcc0bda, node=PMEM)
+[ 1385.093740] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000dca6519, node=DRAM)
+[ 1385.093740] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d7521db6, node=PMEM)
+[ 1385.093741] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004ea700ce, node=PMEM)
+[ 1385.093742] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000068809e88, node=DRAM)
+[ 1385.093742] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000009901f465, node=PMEM)
+[ 1385.093743] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d5ab60ce, node=DRAM)
+[ 1385.093744] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000aa1007a5, node=PMEM)
+[ 1385.093744] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005d60a20a, node=DRAM)
+[ 1385.093745] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000024f5a210, node=PMEM)
+[ 1385.093746] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000008a4167dd, node=DRAM)
+[ 1385.093747] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c4c81b82, node=PMEM)
+[ 1385.093747] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ae2c8f0c, node=DRAM)
+[ 1385.093748] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000064a69333, node=PMEM)
+[ 1385.093748] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000845acf26, node=PMEM)
+[ 1385.093749] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000744f05a, node=DRAM)
+[ 1385.093749] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000038023f62, node=PMEM)
+[ 1385.093750] pgdat 0 MIGRATION DISABLED - would have migrated 32 folios from inactive list
+[ 1385.093751] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000102413f6, node=PMEM)
+[ 1385.093752] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000023565541, node=PMEM)
+[ 1385.093753] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000009295ea81, node=PMEM)
+[ 1385.093753] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000257adaff, node=PMEM)
+[ 1385.093753] pgdat 0 folio activated: 0
+[ 1385.093754] pgdat 0 folio deactivated: 0
+[ 1385.093755] pgdat 0 folio promoted: 0
+[ 1385.093756] promote list empty
+[ 1385.093756] pgdat 0 scanned 0 on promote list
+[ 1385.093756] pgdat 1 folio activated: 0
+[ 1385.093757] pgdat 0 taken 0 on promote list
+[ 1385.093757] pgdat 1 folio deactivated: 0
+[ 1385.093758] pgdat 1 folio promoted: 0
+[ 1385.093759] promote list empty
+[ 1385.093759] pgdat 0 folio activated: 0
+[ 1385.093760] pgdat 1 scanned 0 on promote list
+[ 1385.093761] pgdat 0 folio deactivated: 0
+[ 1385.093762] pgdat 0 folio promoted: 0
+[ 1385.093762] pgdat 1 taken 0 on promote list
+[ 1385.093763] promote list empty
+[ 1385.093763] pgdat 1 folio activated: 0
+[ 1385.093764] pgdat 0 scanned 0 on promote list
+[ 1385.093764] pgdat 1 folio deactivated: 0
+[ 1385.093766] pgdat 1 folio promoted: 0
+[ 1385.093766] pgdat 0 taken 0 on promote list
+[ 1385.093767] promote list empty
+[ 1385.093767] pgdat 1 scanned 0 on promote list
+[ 1385.093768] pgdat 1 taken 0 on promote list
+[ 1385.093768] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000784d3a3e, node=DRAM)
+[ 1385.093769] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000feadb8a9, node=DRAM)
+[ 1385.093770] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a553c87e, node=DRAM)
+[ 1385.093770] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000015d357a, node=DRAM)
+[ 1385.093771] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d3af9652, node=PMEM)
+[ 1385.093771] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000629c0966, node=DRAM)
+[ 1385.093772] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000441202f, node=DRAM)
+[ 1385.093773] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000034b25237, node=PMEM)
+[ 1385.093774] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004c9dc172, node=PMEM)
+[ 1385.093774] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000006bd0d7cd, node=DRAM)
+[ 1385.093775] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e313f3e3, node=PMEM)
+[ 1385.093776] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003e139408, node=DRAM)
+[ 1385.093777] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000094ce44b8, node=PMEM)
+[ 1385.093778] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c395917e, node=DRAM)
+[ 1385.093778] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000062c55bb9, node=PMEM)
+[ 1385.093779] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005d939693, node=DRAM)
+[ 1385.093780] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ec17d07e, node=PMEM)
+[ 1385.093780] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000007fc0b66a, node=DRAM)
+[ 1385.093781] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b5660cce, node=PMEM)
+[ 1385.093782] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004b7f916f, node=DRAM)
+[ 1385.093783] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b566fb17, node=PMEM)
+[ 1385.093783] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000280693b2, node=DRAM)
+[ 1385.093784] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000f4d2e60b, node=PMEM)
+[ 1385.093785] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000f853f4e1, node=DRAM)
+[ 1385.093785] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000006836ad3, node=PMEM)
+[ 1385.093786] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b8f1d6ab, node=DRAM)
+[ 1385.093787] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000dbb25d1c, node=PMEM)
+[ 1385.093787] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e72aaa1a, node=DRAM)
+[ 1385.093788] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a5bff301, node=PMEM)
+[ 1385.093789] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b3c54739, node=DRAM)
+[ 1385.093790] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000079ff88e9, node=PMEM)
+[ 1385.093790] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000718fd0b5, node=DRAM)
+[ 1385.093791] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c9a18832, node=PMEM)
+[ 1385.093792] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000054866ba3, node=DRAM)
+[ 1385.093792] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000108a114a, node=PMEM)
+[ 1385.093793] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d146eab0, node=PMEM)
+[ 1385.093794] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003738200f, node=DRAM)
+[ 1385.093795] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000065dac766, node=DRAM)
+[ 1385.093795] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000052f65858, node=PMEM)
+[ 1385.093796] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b6a3596c, node=PMEM)
+[ 1385.093796] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000011617025, node=DRAM)
+[ 1385.093797] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004fec0b57, node=PMEM)
+[ 1385.093798] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000aa7209c7, node=DRAM)
+[ 1385.093799] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000001f43eaa, node=PMEM)
+[ 1385.093799] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003e6c7b1a, node=DRAM)
+[ 1385.093800] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000001675ec97, node=PMEM)
+[ 1385.093800] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003e730871, node=PMEM)
+[ 1385.093801] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000006e1375c1, node=DRAM)
+[ 1385.093802] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d9ce7f3d, node=PMEM)
+[ 1385.093802] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000007a18f5c, node=DRAM)
+[ 1385.093803] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000edc07460, node=PMEM)
+[ 1385.093804] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b87f8fbf, node=DRAM)
+[ 1385.093805] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000045751e63, node=PMEM)
+[ 1385.093805] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003e2f1e6b, node=DRAM)
+[ 1385.093806] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d675ea50, node=PMEM)
+[ 1385.093807] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000095d7d98c, node=DRAM)
+[ 1385.093808] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000839fca8, node=PMEM)
+[ 1385.093808] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004a4dbfa2, node=DRAM)
+[ 1385.093809] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a0967a23, node=PMEM)
+[ 1385.093810] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000058c23fa6, node=DRAM)
+[ 1385.093810] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000032193944, node=PMEM)
+[ 1385.093811] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000118730d9, node=DRAM)
+[ 1385.093812] pgdat 0 MIGRATION DISABLED - would have migrated 32 folios from inactive list
+[ 1385.093812] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a72573eb, node=PMEM)
+[ 1385.093813] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003ba3683b, node=PMEM)
+[ 1385.093815] pgdat 0 folio activated: 0
+[ 1385.093815] pgdat 1 folio activated: 0
+[ 1385.093815] pgdat 0 folio deactivated: 0
+[ 1385.093816] pgdat 0 folio promoted: 0
+[ 1385.093817] pgdat 1 folio deactivated: 0
+[ 1385.093818] pgdat 1 folio promoted: 0
+[ 1385.093818] promote list empty
+[ 1385.093819] promote list empty
+[ 1385.093819] pgdat 0 scanned 0 on promote list
+[ 1385.093820] pgdat 1 scanned 0 on promote list
+[ 1385.093821] pgdat 1 taken 0 on promote list
+[ 1385.093822] pgdat 0 taken 0 on promote list
+[ 1385.093823] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a31a4bdc, node=DRAM)
+[ 1385.093824] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000026722b5c, node=DRAM)
+[ 1385.093825] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000699591c5, node=DRAM)
+[ 1385.093825] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e418cd48, node=DRAM)
+[ 1385.093825] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000002e2af862, node=PMEM)
+[ 1385.093826] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d16b08cf, node=DRAM)
+[ 1385.093827] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b7c9776c, node=PMEM)
+[ 1385.093828] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000299caf4b, node=DRAM)
+[ 1385.093828] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c56c929e, node=PMEM)
+[ 1385.093829] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000087b75eb4, node=PMEM)
+[ 1385.093830] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000091f87aea, node=DRAM)
+[ 1385.093830] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c3c751fb, node=PMEM)
+[ 1385.093831] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005e797a3e, node=DRAM)
+[ 1385.093832] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000f2db8f17, node=PMEM)
+[ 1385.093832] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e79b3739, node=PMEM)
+[ 1385.093833] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000080f1158c, node=DRAM)
+[ 1385.093834] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000008b376078, node=PMEM)
+[ 1385.093834] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000013dfce01, node=DRAM)
+[ 1385.093835] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000023a28a48, node=PMEM)
+[ 1385.093836] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005bdb853a, node=DRAM)
+[ 1385.093836] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004f8ede16, node=PMEM)
+[ 1385.093837] pgdat 0 MIGRATION DISABLED - would have migrated 11 folios from inactive list
+[ 1385.093837] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005e07595c, node=PMEM)
+[ 1385.093838] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000002514a561, node=PMEM)
+[ 1385.093839] pgdat 0 folio activated: 0
+[ 1385.093839] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000098b79bb2, node=PMEM)
+[ 1385.093840] pgdat 0 folio deactivated: 0
+[ 1385.093841] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b3298d00, node=PMEM)
+[ 1385.093842] pgdat 0 folio promoted: 0
+[ 1385.093843] promote list empty
+[ 1385.093843] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000271de435, node=PMEM)
+[ 1385.093844] pgdat 0 scanned 0 on promote list
+[ 1385.093844] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a91877e3, node=PMEM)
+[ 1385.093845] pgdat 0 taken 0 on promote list
+[ 1385.093846] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000006899fc45, node=PMEM)
+[ 1385.093847] pgdat 0 folio activated: 0
+[ 1385.093847] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d720f567, node=PMEM)
+[ 1385.093848] pgdat 0 folio deactivated: 0
+[ 1385.093849] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000035ddba57, node=PMEM)
+[ 1385.093850] pgdat 0 folio promoted: 0
+[ 1385.093850] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000443df78f, node=PMEM)
+[ 1385.093851] promote list empty
+[ 1385.093852] pgdat 0 scanned 0 on promote list
+[ 1385.093852] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d8038be7, node=PMEM)
+[ 1385.093853] pgdat 0 taken 0 on promote list
+[ 1385.093854] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000cfa46368, node=PMEM)
+[ 1385.093855] pgdat 0 folio activated: 0
+[ 1385.093855] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000057da2026, node=PMEM)
+[ 1385.093856] pgdat 0 folio deactivated: 0
+[ 1385.093856] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000043e16b32, node=PMEM)
+[ 1385.093857] pgdat 0 folio promoted: 0
+[ 1385.093858] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b6eb6253, node=PMEM)
+[ 1385.093859] promote list empty
+[ 1385.093859] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e7eb48cf, node=PMEM)
+[ 1385.093859] pgdat 0 scanned 0 on promote list
+[ 1385.093860] pgdat 0 taken 0 on promote list
+[ 1385.093860] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e1067936, node=PMEM)
+[ 1385.093862] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c615e1c5, node=PMEM)
+[ 1385.093862] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000455ca09e, node=PMEM)
+[ 1385.093863] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000560667a3, node=PMEM)
+[ 1385.093863] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000047cf3ce4, node=PMEM)
+[ 1385.093864] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e7ee5efb, node=PMEM)
+[ 1385.093864] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a0fc4c68, node=DRAM)
+[ 1385.093865] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005a7d256c, node=DRAM)
+[ 1385.093866] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e7482e13, node=DRAM)
+[ 1385.093866] pgdat 1 folio activated: 0
+[ 1385.093867] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000c0024fb, node=DRAM)
+[ 1385.093868] pgdat 1 folio deactivated: 0
+[ 1385.093868] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000065b9f36f, node=DRAM)
+[ 1385.093869] pgdat 1 folio promoted: 0
+[ 1385.093869] promote list empty
+[ 1385.093870] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000044a98914, node=DRAM)
+[ 1385.093870] pgdat 1 scanned 0 on promote list
+[ 1385.093871] pgdat 1 taken 0 on promote list
+[ 1385.093872] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000096b05c0d, node=DRAM)
+[ 1385.093873] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000aa91f59f, node=DRAM)
+[ 1385.093873] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c488e820, node=PMEM)
+[ 1385.093873] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004e57afef, node=DRAM)
+[ 1385.093874] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d1ed2956, node=DRAM)
+[ 1385.093875] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000001676bef1, node=PMEM)
+[ 1385.093876] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000008cd63e57, node=DRAM)
+[ 1385.093876] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000091f141b8, node=PMEM)
+[ 1385.093877] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000044457e48, node=DRAM)
+[ 1385.093877] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000eafcda7e, node=PMEM)
+[ 1385.093878] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e08814bd, node=DRAM)
+[ 1385.093879] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000772378da, node=PMEM)
+[ 1385.093880] pgdat 1 folio activated: 0
+[ 1385.093880] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000fd4ca1b4, node=DRAM)
+[ 1385.093882] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000062e1b66c, node=DRAM)
+[ 1385.093882] pgdat 1 folio deactivated: 0
+[ 1385.093883] pgdat 1 folio promoted: 0
+[ 1385.093884] promote list empty
+[ 1385.093884] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ced13f87, node=DRAM)
+[ 1385.093885] pgdat 1 scanned 0 on promote list
+[ 1385.093886] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000cbe8794e, node=DRAM)
+[ 1385.093887] pgdat 1 taken 0 on promote list
+[ 1385.093887] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000001ef3a77a, node=DRAM)
+[ 1385.093888] pgdat 1 folio activated: 0
+[ 1385.093888] pgdat 1 folio deactivated: 0
+[ 1385.093889] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004a9e0298, node=DRAM)
+[ 1385.093890] pgdat 1 folio promoted: 0
+[ 1385.093890] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000074788173, node=DRAM)
+[ 1385.093891] promote list empty
+[ 1385.093892] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c9b8bb6b, node=DRAM)
+[ 1385.093893] pgdat 1 scanned 0 on promote list
+[ 1385.093893] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c4100a75, node=DRAM)
+[ 1385.093894] pgdat 1 taken 0 on promote list
+[ 1385.093895] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000334348e1, node=DRAM)
+[ 1385.093896] pgdat 1 folio activated: 0
+[ 1385.093896] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000008f1e060a, node=DRAM)
+[ 1385.093897] pgdat 1 folio deactivated: 0
+[ 1385.093897] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ec6f98ea, node=DRAM)
+[ 1385.093898] pgdat 1 folio promoted: 0
+[ 1385.093898] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000077e95069, node=DRAM)
+[ 1385.093899] promote list empty
+[ 1385.093900] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c02bd55e, node=DRAM)
+[ 1385.093901] pgdat 1 scanned 0 on promote list
+[ 1385.093901] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ee12cce6, node=DRAM)
+[ 1385.093902] pgdat 1 taken 0 on promote list
+[ 1385.093903] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004015e850, node=DRAM)
+[ 1385.093904] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003d744c4c, node=DRAM)
+[ 1385.093904] pgdat 1 folio activated: 0
+[ 1385.093905] pgdat 1 folio deactivated: 0
+[ 1385.093905] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c1b66945, node=DRAM)
+[ 1385.093906] pgdat 1 folio promoted: 0
+[ 1385.093907] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000068af0ed3, node=DRAM)
+[ 1385.093907] promote list empty
+[ 1385.093908] pgdat 0 MIGRATION DISABLED - would have migrated 32 folios from inactive list
+[ 1385.093908] pgdat 1 scanned 0 on promote list
+[ 1385.093909] pgdat 1 taken 0 on promote list
+[ 1385.093910] pgdat 1 folio activated: 0
+[ 1385.093910] pgdat 1 folio deactivated: 0
+[ 1385.093911] pgdat 0 folio activated: 0
+[ 1385.093912] pgdat 1 folio promoted: 0
+[ 1385.093912] pgdat 0 folio deactivated: 0
+[ 1385.093913] pgdat 0 folio promoted: 0
+[ 1385.093913] promote list empty
+[ 1385.093914] pgdat 1 scanned 0 on promote list
+[ 1385.093914] promote list empty
+[ 1385.093915] pgdat 0 scanned 0 on promote list
+[ 1385.093916] pgdat 1 taken 0 on promote list
+[ 1385.093917] pgdat 1 folio activated: 0
+[ 1385.093917] pgdat 0 taken 0 on promote list
+[ 1385.093918] pgdat 1 folio deactivated: 0
+[ 1385.093919] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005ea5e83d, node=DRAM)
+[ 1385.093920] pgdat 1 folio promoted: 0
+[ 1385.093920] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000088a06147, node=DRAM)
+[ 1385.093921] promote list empty
+[ 1385.093922] pgdat 1 scanned 0 on promote list
+[ 1385.093922] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000004679f83, node=DRAM)
+[ 1385.093923] pgdat 1 taken 0 on promote list
+[ 1385.093924] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003b3c3682, node=DRAM)
+[ 1385.093925] pgdat 1 folio activated: 0
+[ 1385.093925] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000bbfda05d, node=DRAM)
+[ 1385.093926] pgdat 1 folio deactivated: 0
+[ 1385.093927] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000007b782250, node=DRAM)
+[ 1385.093928] pgdat 1 folio promoted: 0
+[ 1385.093929] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000008f29b3c, node=DRAM)
+[ 1385.093929] promote list empty
+[ 1385.093930] pgdat 1 scanned 0 on promote list
+[ 1385.093930] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000075ec3a78, node=DRAM)
+[ 1385.093931] pgdat 1 taken 0 on promote list
+[ 1385.093932] pgdat 0 MIGRATION DISABLED - would have migrated 8 folios from inactive list
+[ 1385.093933] pgdat 1 folio activated: 0
+[ 1385.093934] pgdat 1 folio deactivated: 0
+[ 1385.093934] pgdat 0 folio activated: 0
+[ 1385.093935] pgdat 1 folio promoted: 0
+[ 1385.093935] pgdat 0 folio deactivated: 0
+[ 1385.093936] pgdat 0 folio promoted: 0
+[ 1385.093937] promote list empty
+[ 1385.093938] promote list empty
+[ 1385.093938] pgdat 1 scanned 0 on promote list
+[ 1385.093939] pgdat 1 taken 0 on promote list
+[ 1385.093939] pgdat 0 scanned 0 on promote list
+[ 1385.093941] pgdat 0 taken 0 on promote list
+[ 1385.093942] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000066a42b36, node=PMEM)
+[ 1385.093943] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000009a482f84, node=PMEM)
+[ 1385.093944] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000001ddfd63d, node=PMEM)
+[ 1385.093944] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e9854933, node=PMEM)
+[ 1385.093944] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ef031e0f, node=DRAM)
+[ 1385.093945] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000404445a6, node=PMEM)
+[ 1385.093946] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000bc19ca0b, node=DRAM)
+[ 1385.093946] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005ee31ba0, node=PMEM)
+[ 1385.093947] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005e5a7ef7, node=DRAM)
+[ 1385.093948] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004a63f782, node=PMEM)
+[ 1385.093949] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000625004be, node=PMEM)
+[ 1385.093949] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000437f5399, node=DRAM)
+[ 1385.093950] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000070944fbf, node=PMEM)
+[ 1385.093950] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e09c58f9, node=DRAM)
+[ 1385.093951] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000798c0672, node=PMEM)
+[ 1385.093952] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000087101a2f, node=DRAM)
+[ 1385.093952] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ee8eff80, node=PMEM)
+[ 1385.093953] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000009ed9ca38, node=DRAM)
+[ 1385.093954] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000350aff03, node=PMEM)
+[ 1385.093954] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000065ebb3, node=DRAM)
+[ 1385.093955] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000219d5f7c, node=PMEM)
+[ 1385.093956] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c26472ef, node=DRAM)
+[ 1385.093957] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000538d3960, node=PMEM)
+[ 1385.093957] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000560ec392, node=DRAM)
+[ 1385.093958] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e934d74e, node=PMEM)
+[ 1385.093959] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000244f57da, node=DRAM)
+[ 1385.093960] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000007bc0bbb4, node=DRAM)
+[ 1385.093960] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d2f80aad, node=PMEM)
+[ 1385.093961] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000057b252d9, node=DRAM)
+[ 1385.093962] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000da724a8e, node=PMEM)
+[ 1385.093963] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000008641e68, node=DRAM)
+[ 1385.093963] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000abbf911d, node=PMEM)
+[ 1385.093964] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000eda01052, node=DRAM)
+[ 1385.093965] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ff7fb050, node=PMEM)
+[ 1385.093966] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000001ffbe48f, node=PMEM)
+[ 1385.093966] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000fd56dfe7, node=DRAM)
+[ 1385.093967] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000cacc54ea, node=PMEM)
+[ 1385.093967] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000001fd6e390, node=DRAM)
+[ 1385.093968] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b9368464, node=PMEM)
+[ 1385.093969] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a9be813b, node=DRAM)
+[ 1385.093969] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a4821bef, node=PMEM)
+[ 1385.093970] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b1555dd0, node=DRAM)
+[ 1385.093971] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000051a73d13, node=PMEM)
+[ 1385.093972] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000002d5265c9, node=DRAM)
+[ 1385.093972] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b75d5cde, node=PMEM)
+[ 1385.093973] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e9870af8, node=DRAM)
+[ 1385.093974] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000083d5cf36, node=PMEM)
+[ 1385.093974] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000aa86f4b3, node=DRAM)
+[ 1385.093975] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005b209bf7, node=PMEM)
+[ 1385.093976] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000076242304, node=DRAM)
+[ 1385.093977] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000001add9687, node=PMEM)
+[ 1385.093977] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d49f7d9b, node=DRAM)
+[ 1385.093978] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ab7d0840, node=PMEM)
+[ 1385.093979] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000006c40b22d, node=DRAM)
+[ 1385.093980] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000cfa16611, node=PMEM)
+[ 1385.093980] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000de30781c, node=PMEM)
+[ 1385.093981] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000f44215c7, node=DRAM)
+[ 1385.093982] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000085014d2c, node=PMEM)
+[ 1385.093982] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000f9317e30, node=DRAM)
+[ 1385.093984] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b2b42dce, node=DRAM)
+[ 1385.093984] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e4520ef4, node=DRAM)
+[ 1385.093985] pgdat 1 folio activated: 0
+[ 1385.093985] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000256a6c8e, node=DRAM)
+[ 1385.093986] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000650e2283, node=DRAM)
+[ 1385.093986] pgdat 1 folio deactivated: 0
+[ 1385.093987] pgdat 1 folio promoted: 0
+[ 1385.093988] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000009d15c0bf, node=DRAM)
+[ 1385.093988] promote list empty
+[ 1385.093989] pgdat 1 scanned 0 on promote list
+[ 1385.093990] pgdat 0 MIGRATION DISABLED - would have migrated 32 folios from inactive list
+[ 1385.093991] pgdat 1 taken 0 on promote list
+[ 1385.093993] pgdat 0 folio activated: 0
+[ 1385.093993] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000fdbb629a, node=PMEM)
+[ 1385.093994] pgdat 0 folio deactivated: 0
+[ 1385.093995] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000226be84a, node=PMEM)
+[ 1385.093996] pgdat 0 folio promoted: 0
+[ 1385.093996] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000d003ff8d, node=PMEM)
+[ 1385.093997] promote list empty
+[ 1385.093998] pgdat 0 scanned 0 on promote list
+[ 1385.093998] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000000414e356, node=PMEM)
+[ 1385.094000] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000b9d87ee0, node=PMEM)
+[ 1385.094000] pgdat 0 taken 0 on promote list
+[ 1385.094001] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000b31e2f22, node=PMEM)
+[ 1385.094002] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000002b20cbfd, node=PMEM)
+[ 1385.094003] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000a8e22ea6, node=PMEM)
+[ 1385.094003] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000ae873293, node=PMEM)
+[ 1385.094003] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000069055287, node=DRAM)
+[ 1385.094004] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000903667c2, node=PMEM)
+[ 1385.094005] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000f41a2053, node=DRAM)
+[ 1385.094005] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000ebf74d84, node=PMEM)
+[ 1385.094006] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c1df69a3, node=DRAM)
+[ 1385.094007] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000002df9b86a, node=PMEM)
+[ 1385.094008] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000f94d3806, node=DRAM)
+[ 1385.094009] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000f445051f, node=PMEM)
+[ 1385.094009] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004c785f80, node=DRAM)
+[ 1385.094010] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000605f9a61, node=PMEM)
+[ 1385.094011] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c6bfad22, node=DRAM)
+[ 1385.094012] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000000611faa9, node=PMEM)
+[ 1385.094012] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b0266bbf, node=DRAM)
+[ 1385.094013] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000060d547bd, node=DRAM)
+[ 1385.094013] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000585f99c6, node=PMEM)
+[ 1385.094014] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000022474a1b, node=DRAM)
+[ 1385.094015] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000027206e52, node=PMEM)
+[ 1385.094016] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000007a026872, node=PMEM)
+[ 1385.094016] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003449f986, node=DRAM)
+[ 1385.094017] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000006537966b, node=DRAM)
+[ 1385.094017] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000006534e010, node=PMEM)
+[ 1385.094018] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000462faa73, node=PMEM)
+[ 1385.094019] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000007db85f74, node=DRAM)
+[ 1385.094019] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000003b589a8b, node=PMEM)
+[ 1385.094020] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ec37c0db, node=DRAM)
+[ 1385.094021] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000224d1f75, node=PMEM)
+[ 1385.094021] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000016cde1f8, node=DRAM)
+[ 1385.094022] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000007f86e517, node=DRAM)
+[ 1385.094022] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000003b82f438, node=PMEM)
+[ 1385.094023] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a6055eaa, node=DRAM)
+[ 1385.094024] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000064a4ecb, node=PMEM)
+[ 1385.094025] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000071f61898, node=DRAM)
+[ 1385.094025] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000007b9828d6, node=PMEM)
+[ 1385.094026] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004e86dfea, node=DRAM)
+[ 1385.094027] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000cb94c2da, node=PMEM)
+[ 1385.094028] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000fac73096, node=DRAM)
+[ 1385.094028] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ef36e1a9, node=PMEM)
+[ 1385.094029] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b37c844c, node=DRAM)
+[ 1385.094029] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c172405c, node=PMEM)
+[ 1385.094030] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ef2aa1d3, node=DRAM)
+[ 1385.094031] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000007757390c, node=PMEM)
+[ 1385.094032] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000cfab8802, node=DRAM)
+[ 1385.094032] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a8d0fdf7, node=PMEM)
+[ 1385.094033] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000000b475c, node=DRAM)
+[ 1385.094034] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000f4fbed93, node=PMEM)
+[ 1385.094034] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000053996612, node=DRAM)
+[ 1385.094035] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b61a352c, node=PMEM)
+[ 1385.094036] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000914aeba8, node=DRAM)
+[ 1385.094037] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000001c7928fd, node=DRAM)
+[ 1385.094038] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000030ffbb6f, node=DRAM)
+[ 1385.094038] pgdat 1 folio activated: 0
+[ 1385.094038] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000030efda13, node=DRAM)
+[ 1385.094039] pgdat 1 folio deactivated: 0
+[ 1385.094040] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000086173002, node=DRAM)
+[ 1385.094041] pgdat 1 folio promoted: 0
+[ 1385.094041] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a9acbd1d, node=DRAM)
+[ 1385.094042] promote list empty
+[ 1385.094043] pgdat 1 scanned 0 on promote list
+[ 1385.094043] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000059bff3, node=DRAM)
+[ 1385.094044] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000064a80811, node=DRAM)
+[ 1385.094044] pgdat 1 taken 0 on promote list
+[ 1385.094045] pgdat 0 MIGRATION DISABLED - would have migrated 32 folios from inactive list
+[ 1385.094046] pgdat 1 folio activated: 0
+[ 1385.094047] pgdat 1 folio deactivated: 0
+[ 1385.094048] pgdat 1 folio promoted: 0
+[ 1385.094048] promote list empty
+[ 1385.094049] pgdat 1 scanned 0 on promote list
+[ 1385.094049] pgdat 0 folio activated: 0
+[ 1385.094050] pgdat 0 folio deactivated: 0
+[ 1385.094050] pgdat 1 taken 0 on promote list
+[ 1385.094051] pgdat 0 folio promoted: 0
+[ 1385.094051] pgdat 1 folio activated: 0
+[ 1385.094052] promote list empty
+[ 1385.094053] pgdat 0 scanned 0 on promote list
+[ 1385.094053] pgdat 1 folio deactivated: 0
+[ 1385.094054] pgdat 0 taken 0 on promote list
+[ 1385.094054] pgdat 1 folio promoted: 0
+[ 1385.094056] promote list empty
+[ 1385.094056] pgdat 1 scanned 0 on promote list
+[ 1385.094057] pgdat 1 taken 0 on promote list
+[ 1385.094058] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000f1060c7c, node=DRAM)
+[ 1385.094059] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000f0386244, node=DRAM)
+[ 1385.094060] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003ba30678, node=DRAM)
+[ 1385.094060] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000068b1ab74, node=PMEM)
+[ 1385.094061] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004a342276, node=DRAM)
+[ 1385.094061] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000002fabfe1a, node=PMEM)
+[ 1385.094062] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003f493d0f, node=DRAM)
+[ 1385.094063] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000058e9f433, node=PMEM)
+[ 1385.094063] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000873ced1f, node=DRAM)
+[ 1385.094064] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000042b95884, node=PMEM)
+[ 1385.094065] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b1fa438f, node=DRAM)
+[ 1385.094066] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000017424ad3, node=PMEM)
+[ 1385.094067] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000bdf68d19, node=DRAM)
+[ 1385.094067] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000089acbba9, node=PMEM)
+[ 1385.094068] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000008150bd7, node=DRAM)
+[ 1385.094069] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000001ded4e67, node=PMEM)
+[ 1385.094069] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000045080a5a, node=DRAM)
+[ 1385.094070] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d294a4f5, node=PMEM)
+[ 1385.094071] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000fba1e552, node=DRAM)
+[ 1385.094071] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000007cc70fd, node=PMEM)
+[ 1385.094072] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000008d859c42, node=DRAM)
+[ 1385.094072] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000023e9d6a4, node=PMEM)
+[ 1385.094073] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a0171cc9, node=DRAM)
+[ 1385.094074] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000002e93e3c7, node=PMEM)
+[ 1385.094075] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000002f04b7eb, node=DRAM)
+[ 1385.094075] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003db8b329, node=PMEM)
+[ 1385.094076] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000fd814355, node=DRAM)
+[ 1385.094077] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000086e8e255, node=PMEM)
+[ 1385.094078] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000fd96cc37, node=DRAM)
+[ 1385.094078] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000fdf3de3d, node=PMEM)
+[ 1385.094079] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e00a19ad, node=DRAM)
+[ 1385.094080] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000002e7f062f, node=PMEM)
+[ 1385.094080] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000070e0d090, node=DRAM)
+[ 1385.094081] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000b671dc8b, node=PMEM)
+[ 1385.094082] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000007ff6a3e6, node=DRAM)
+[ 1385.094083] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c8f7e9a4, node=PMEM)
+[ 1385.094083] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000006a9e360d, node=DRAM)
+[ 1385.094084] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000222f2ce0, node=PMEM)
+[ 1385.094085] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000624861e0, node=DRAM)
+[ 1385.094085] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e03bd54b, node=PMEM)
+[ 1385.094086] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000026c4c16f, node=DRAM)
+[ 1385.094087] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ed513cf4, node=PMEM)
+[ 1385.094088] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000001502e0b2, node=DRAM)
+[ 1385.094088] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000f523b161, node=PMEM)
+[ 1385.094089] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000783f0b3, node=DRAM)
+[ 1385.094089] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d815f944, node=PMEM)
+[ 1385.094090] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000028f5507f, node=DRAM)
+[ 1385.094091] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000774ac3ff, node=PMEM)
+[ 1385.094092] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000000d803af, node=DRAM)
+[ 1385.094092] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000045febca1, node=PMEM)
+[ 1385.094093] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000001227d50e, node=DRAM)
+[ 1385.094094] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000379839a2, node=PMEM)
+[ 1385.094094] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000076fd55ee, node=DRAM)
+[ 1385.094095] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000827f9c58, node=PMEM)
+[ 1385.094096] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003120e82d, node=DRAM)
+[ 1385.094097] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000006c61c2af, node=PMEM)
+[ 1385.094097] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000bd35e4c1, node=DRAM)
+[ 1385.094098] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005dfe74e4, node=PMEM)
+[ 1385.094099] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000094b4ccd7, node=DRAM)
+[ 1385.094100] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000091d3ee63, node=PMEM)
+[ 1385.094100] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000009649cc68, node=DRAM)
+[ 1385.094101] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d5a41112, node=PMEM)
+[ 1385.094102] pgdat 0 MIGRATION DISABLED - would have migrated 32 folios from inactive list
+[ 1385.094102] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000aaee1db9, node=PMEM)
+[ 1385.094104] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003868f7f4, node=PMEM)
+[ 1385.094105] pgdat 0 folio activated: 0
+[ 1385.094105] pgdat 0 folio deactivated: 0
+[ 1385.094106] pgdat 0 folio promoted: 0
+[ 1385.094106] pgdat 1 folio activated: 0
+[ 1385.094107] promote list empty
+[ 1385.094107] pgdat 1 folio deactivated: 0
+[ 1385.094108] pgdat 0 scanned 0 on promote list
+[ 1385.094109] pgdat 1 folio promoted: 0
+[ 1385.094110] pgdat 0 taken 0 on promote list
+[ 1385.094111] promote list empty
+[ 1385.094111] pgdat 1 scanned 0 on promote list
+[ 1385.094112] pgdat 1 taken 0 on promote list
+[ 1385.094112] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000725a54c1, node=DRAM)
+[ 1385.094113] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000cb477511, node=DRAM)
+[ 1385.094114] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000be527947, node=DRAM)
+[ 1385.094115] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003ffd226c, node=DRAM)
+[ 1385.094116] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e8644474, node=DRAM)
+[ 1385.094116] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000456c13b3, node=PMEM)
+[ 1385.094117] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ef206518, node=PMEM)
+[ 1385.094117] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000006d34f847, node=DRAM)
+[ 1385.094118] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000009af633ac, node=PMEM)
+[ 1385.094118] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000021216717, node=DRAM)
+[ 1385.094119] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b93c1e68, node=DRAM)
+[ 1385.094120] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000852dc381, node=PMEM)
+[ 1385.094121] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000774e2ad5, node=PMEM)
+[ 1385.094121] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000f1244257, node=DRAM)
+[ 1385.094122] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000dae65743, node=PMEM)
+[ 1385.094122] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a8d19d62, node=DRAM)
+[ 1385.094123] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000092dec83c, node=PMEM)
+[ 1385.094124] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ac7c80f2, node=DRAM)
+[ 1385.094124] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000034ee05de, node=PMEM)
+[ 1385.094125] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c5de4ca9, node=DRAM)
+[ 1385.094126] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005d58e3d4, node=PMEM)
+[ 1385.094127] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d179a9d3, node=PMEM)
+[ 1385.094127] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ef85b2ee, node=DRAM)
+[ 1385.094128] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000006ffc257b, node=PMEM)
+[ 1385.094128] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ba8bf0e6, node=DRAM)
+[ 1385.094129] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000007aed6224, node=PMEM)
+[ 1385.094130] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000011192bf9, node=PMEM)
+[ 1385.094130] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000007a6e2bd0, node=DRAM)
+[ 1385.094131] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b2e0ea28, node=DRAM)
+[ 1385.094131] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ed7b9340, node=PMEM)
+[ 1385.094132] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e7f4466f, node=PMEM)
+[ 1385.094132] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000dea7f061, node=DRAM)
+[ 1385.094133] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000dad5f471, node=DRAM)
+[ 1385.094133] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000650c51ab, node=PMEM)
+[ 1385.094134] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000047e5a771, node=PMEM)
+[ 1385.094135] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000db320241, node=DRAM)
+[ 1385.094136] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000382657ca, node=DRAM)
+[ 1385.094136] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e0a2b5f2, node=PMEM)
+[ 1385.094137] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d3feebcd, node=DRAM)
+[ 1385.094138] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d549a0b5, node=PMEM)
+[ 1385.094138] pgdat 0 MIGRATION DISABLED - would have migrated 21 folios from inactive list
+[ 1385.094139] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ce4865b7, node=PMEM)
+[ 1385.094140] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003667f797, node=PMEM)
+[ 1385.094141] pgdat 0 folio activated: 0
+[ 1385.094141] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000006063d491, node=PMEM)
+[ 1385.094142] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000003bdab8e, node=PMEM)
+[ 1385.094143] pgdat 0 folio deactivated: 0
+[ 1385.094143] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000465d70a8, node=PMEM)
+[ 1385.094144] pgdat 0 folio promoted: 0
+[ 1385.094145] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000003705bd9, node=PMEM)
+[ 1385.094145] promote list empty
+[ 1385.094147] pgdat 0 scanned 0 on promote list
+[ 1385.094147] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c6a85c9d, node=PMEM)
+[ 1385.094148] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000262fe8e8, node=PMEM)
+[ 1385.094148] pgdat 0 taken 0 on promote list
+[ 1385.094149] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000033328dd, node=PMEM)
+[ 1385.094150] pgdat 0 folio activated: 0
+[ 1385.094151] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000194ebcf9, node=PMEM)
+[ 1385.094151] pgdat 0 folio deactivated: 0
+[ 1385.094152] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000096189e8f, node=PMEM)
+[ 1385.094153] pgdat 0 folio promoted: 0
+[ 1385.094154] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000014cb8de0, node=PMEM)
+[ 1385.094155] promote list empty
+[ 1385.094155] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000f0fc6fd2, node=PMEM)
+[ 1385.094156] pgdat 0 scanned 0 on promote list
+[ 1385.094157] pgdat 0 taken 0 on promote list
+[ 1385.094158] pgdat 0 folio activated: 0
+[ 1385.094158] pgdat 0 folio deactivated: 0
+[ 1385.094159] pgdat 0 folio promoted: 0
+[ 1385.094159] pgdat 1 folio activated: 0
+[ 1385.094160] pgdat 1 folio deactivated: 0
+[ 1385.094161] promote list empty
+[ 1385.094162] pgdat 0 scanned 0 on promote list
+[ 1385.094162] pgdat 1 folio promoted: 0
+[ 1385.094163] promote list empty
+[ 1385.094163] pgdat 0 taken 0 on promote list
+[ 1385.094164] pgdat 1 scanned 0 on promote list
+[ 1385.094165] pgdat 1 taken 0 on promote list
+[ 1385.094165] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000006b2c394f, node=DRAM)
+[ 1385.094166] pgdat 1 folio activated: 0
+[ 1385.094167] pgdat 0 MIGRATION DISABLED - would have migrated 1 folios from inactive list
+[ 1385.094168] pgdat 1 folio deactivated: 0
+[ 1385.094168] pgdat 0 folio activated: 0
+[ 1385.094169] pgdat 1 folio promoted: 0
+[ 1385.094170] pgdat 0 folio deactivated: 0
+[ 1385.094170] promote list empty
+[ 1385.094171] pgdat 1 scanned 0 on promote list
+[ 1385.094171] pgdat 0 folio promoted: 0
+[ 1385.094173] promote list empty
+[ 1385.094173] pgdat 1 taken 0 on promote list
+[ 1385.094174] pgdat 0 scanned 0 on promote list
+[ 1385.094175] pgdat 0 taken 0 on promote list
+[ 1385.094176] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000000db4149f, node=PMEM)
+[ 1385.094177] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000011900f76, node=PMEM)
+[ 1385.094178] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000a7821995, node=DRAM)
+[ 1385.094178] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000092eaff6, node=PMEM)
+[ 1385.094179] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000561c6419, node=PMEM)
+[ 1385.094180] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000009e96a1a5, node=DRAM)
+[ 1385.094181] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000005d640f7a, node=DRAM)
+[ 1385.094181] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000008fb9f265, node=PMEM)
+[ 1385.094182] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000008ea7271f, node=PMEM)
+[ 1385.094182] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d6f32a9a, node=DRAM)
+[ 1385.094183] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a86a3b61, node=DRAM)
+[ 1385.094184] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000d44ca54a, node=PMEM)
+[ 1385.094184] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000006570ebf2, node=PMEM)
+[ 1385.094185] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000fbbc840e, node=DRAM)
+[ 1385.094186] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c39879de, node=DRAM)
+[ 1385.094186] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000008b24fb19, node=PMEM)
+[ 1385.094187] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000943473f2, node=DRAM)
+[ 1385.094188] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000e62f5f5b, node=PMEM)
+[ 1385.094188] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000bdcd0754, node=DRAM)
+[ 1385.094189] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000003531e9b0, node=PMEM)
+[ 1385.094190] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a95afbbd, node=DRAM)
+[ 1385.094190] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000a24c8a44, node=PMEM)
+[ 1385.094191] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000ee95726b, node=PMEM)
+[ 1385.094191] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000064467cf5, node=DRAM)
+[ 1385.094192] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000d6f4e11e, node=PMEM)
+[ 1385.094193] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000041440e49, node=DRAM)
+[ 1385.094194] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000de2d1467, node=PMEM)
+[ 1385.094194] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000171373d9, node=DRAM)
+[ 1385.094195] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000003386ff12, node=PMEM)
+[ 1385.094196] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ec3e7a6f, node=DRAM)
+[ 1385.094196] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000b76d1a7c, node=PMEM)
+[ 1385.094197] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000063e03a8, node=DRAM)
+[ 1385.094198] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000005b3c481a, node=PMEM)
+[ 1385.094198] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000030e58a4a, node=DRAM)
+[ 1385.094199] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000f232d45c, node=PMEM)
+[ 1385.094200] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ad66a8d5, node=DRAM)
+[ 1385.094200] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000f6789626, node=PMEM)
+[ 1385.094201] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000de97484f, node=DRAM)
+[ 1385.094202] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000089f28c7b, node=PMEM)
+[ 1385.094202] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000defc75a6, node=DRAM)
+[ 1385.094203] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000ea265c21, node=PMEM)
+[ 1385.094204] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c07adaf0, node=DRAM)
+[ 1385.094204] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000071d7b595, node=PMEM)
+[ 1385.094205] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e35229d9, node=DRAM)
+[ 1385.094205] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000d669f647, node=PMEM)
+[ 1385.094206] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000430ee3c, node=DRAM)
+[ 1385.094207] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000ccd83902, node=PMEM)
+[ 1385.094208] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000f1096e4, node=DRAM)
+[ 1385.094208] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000da8dfb86, node=PMEM)
+[ 1385.094209] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004fd6d91b, node=DRAM)
+[ 1385.094210] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000003ea80c27, node=PMEM)
+[ 1385.094211] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b905aaf9, node=DRAM)
+[ 1385.094211] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000009f6883d7, node=PMEM)
+[ 1385.094212] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000070a0ee49, node=DRAM)
+[ 1385.094212] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000009932060d, node=PMEM)
+[ 1385.094214] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000115d5dda, node=PMEM)
+[ 1385.094214] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e4a5e56e, node=DRAM)
+[ 1385.094215] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000087e7d187, node=PMEM)
+[ 1385.094215] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c64ffc84, node=DRAM)
+[ 1385.094216] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000f1668b23, node=PMEM)
+[ 1385.094217] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005b77add4, node=DRAM)
+[ 1385.094218] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000071a92e07, node=DRAM)
+[ 1385.094219] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000041c5be52, node=DRAM)
+[ 1385.094219] pgdat 1 folio activated: 0
+[ 1385.094219] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000000e07b69, node=DRAM)
+[ 1385.094220] pgdat 1 folio deactivated: 0
+[ 1385.094221] pgdat 0 MIGRATION DISABLED - would have migrated 32 folios from inactive list
+[ 1385.094221] pgdat 1 folio promoted: 0
+[ 1385.094222] promote list empty
+[ 1385.094223] pgdat 1 scanned 0 on promote list
+[ 1385.094224] pgdat 1 taken 0 on promote list
+[ 1385.094224] pgdat 0 folio activated: 0
+[ 1385.094224] pgdat 1 folio activated: 0
+[ 1385.094225] pgdat 1 folio deactivated: 0
+[ 1385.094226] pgdat 0 folio deactivated: 0
+[ 1385.094227] pgdat 0 folio promoted: 0
+[ 1385.094227] pgdat 1 folio promoted: 0
+[ 1385.094228] promote list empty
+[ 1385.094229] pgdat 0 scanned 0 on promote list
+[ 1385.094229] promote list empty
+[ 1385.094230] pgdat 1 scanned 0 on promote list
+[ 1385.094230] pgdat 0 taken 0 on promote list
+[ 1385.094231] pgdat 1 taken 0 on promote list
+[ 1385.094234] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004246b4c7, node=DRAM)
+[ 1385.094234] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000029b0ca7a, node=PMEM)
+[ 1385.094235] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000008bdd1e7a, node=DRAM)
+[ 1385.094235] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000c817a3ee, node=PMEM)
+[ 1385.094237] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000009e8149c6, node=PMEM)
+[ 1385.094237] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000006a821a12, node=DRAM)
+[ 1385.094238] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000006100a2d5, node=PMEM)
+[ 1385.094239] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000047f9f2e7, node=DRAM)
+[ 1385.094239] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005edbbfce, node=PMEM)
+[ 1385.094240] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000091b1abcc, node=DRAM)
+[ 1385.094241] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004e18e77e, node=PMEM)
+[ 1385.094241] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000624f3a6f, node=DRAM)
+[ 1385.094242] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000006a786278, node=PMEM)
+[ 1385.094243] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000009e974303, node=DRAM)
+[ 1385.094243] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000009cca231d, node=PMEM)
+[ 1385.094244] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004c2e73c6, node=DRAM)
+[ 1385.094244] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000264efaed, node=PMEM)
+[ 1385.094245] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000adeb3352, node=DRAM)
+[ 1385.094246] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003cc5660a, node=PMEM)
+[ 1385.094246] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000030c49061, node=DRAM)
+[ 1385.094247] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000007b01a411, node=PMEM)
+[ 1385.094248] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000008daa3741, node=DRAM)
+[ 1385.094249] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000af7d4bc3, node=PMEM)
+[ 1385.094249] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a3da97be, node=DRAM)
+[ 1385.094250] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000008388cfff, node=PMEM)
+[ 1385.094251] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000002a730b28, node=DRAM)
+[ 1385.094251] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000094853ccd, node=PMEM)
+[ 1385.094252] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000006dda6656, node=DRAM)
+[ 1385.094253] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003fcfc305, node=PMEM)
+[ 1385.094253] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000ec2b618, node=DRAM)
+[ 1385.094254] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000b270a11, node=PMEM)
+[ 1385.094255] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000fa040e54, node=DRAM)
+[ 1385.094256] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000950de27f, node=PMEM)
+[ 1385.094256] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e04589bc, node=DRAM)
+[ 1385.094257] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000008be0bf82, node=PMEM)
+[ 1385.094258] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000038da89d8, node=DRAM)
+[ 1385.094258] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003e3a6d2c, node=PMEM)
+[ 1385.094259] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c12eacd6, node=DRAM)
+[ 1385.094260] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000008303fb36, node=PMEM)
+[ 1385.094260] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a9cbb446, node=DRAM)
+[ 1385.094261] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b7196c5a, node=PMEM)
+[ 1385.094262] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004f9b088e, node=DRAM)
+[ 1385.094262] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000fc8685f9, node=PMEM)
+[ 1385.094263] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ae76fe74, node=DRAM)
+[ 1385.094264] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000bfdb58c, node=PMEM)
+[ 1385.094265] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d0863493, node=DRAM)
+[ 1385.094265] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003281b381, node=PMEM)
+[ 1385.094266] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000008fbef8fc, node=DRAM)
+[ 1385.094266] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000895b3952, node=PMEM)
+[ 1385.094267] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b215c35c, node=DRAM)
+[ 1385.094268] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005eaa68f4, node=PMEM)
+[ 1385.094268] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000060a28067, node=DRAM)
+[ 1385.094269] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000006a8d3b11, node=PMEM)
+[ 1385.094270] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000007d59d565, node=DRAM)
+[ 1385.094271] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000009538ebfc, node=PMEM)
+[ 1385.094271] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000904937ea, node=DRAM)
+[ 1385.094272] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000002806689f, node=PMEM)
+[ 1385.094273] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000098776581, node=DRAM)
+[ 1385.094273] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003647d03b, node=PMEM)
+[ 1385.094274] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000eba9d2fb, node=DRAM)
+[ 1385.094275] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000c5bd618a, node=PMEM)
+[ 1385.094275] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000285e4fcb, node=DRAM)
+[ 1385.094276] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000011c2ad6b, node=PMEM)
+[ 1385.094277] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004026a595, node=DRAM)
+[ 1385.094278] pgdat 0 MIGRATION DISABLED - would have migrated 32 folios from inactive list
+[ 1385.094279] pgdat 1 folio activated: 0
+[ 1385.094280] pgdat 1 folio deactivated: 0
+[ 1385.094280] pgdat 0 folio activated: 0
+[ 1385.094281] pgdat 1 folio promoted: 0
+[ 1385.094282] promote list empty
+[ 1385.094282] pgdat 0 folio deactivated: 0
+[ 1385.094283] pgdat 0 folio promoted: 0
+[ 1385.094283] pgdat 1 scanned 0 on promote list
+[ 1385.094284] pgdat 1 taken 0 on promote list
+[ 1385.094285] promote list empty
+[ 1385.094285] pgdat 0 scanned 0 on promote list
+[ 1385.094286] pgdat 1 folio activated: 0
+[ 1385.094286] pgdat 1 folio deactivated: 0
+[ 1385.094287] pgdat 0 taken 0 on promote list
+[ 1385.094288] pgdat 1 folio promoted: 0
+[ 1385.094288] promote list empty
+[ 1385.094289] pgdat 1 scanned 0 on promote list
+[ 1385.094289] pgdat 1 taken 0 on promote list
+[ 1385.094290] pgdat 1 folio activated: 0
+[ 1385.094290] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000002d9b4eb4, node=DRAM)
+[ 1385.094291] pgdat 1 folio deactivated: 0
+[ 1385.094291] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000062c66667, node=DRAM)
+[ 1385.094292] pgdat 1 folio promoted: 0
+[ 1385.094293] promote list empty
+[ 1385.094293] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000001b2fe219, node=DRAM)
+[ 1385.094294] pgdat 1 scanned 0 on promote list
+[ 1385.094295] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000dcc166c, node=DRAM)
+[ 1385.094295] pgdat 1 taken 0 on promote list
+[ 1385.094296] pgdat 1 folio activated: 0
+[ 1385.094296] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000a732cb6c, node=DRAM)
+[ 1385.094297] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000b10b2d0c, node=DRAM)
+[ 1385.094298] pgdat 1 folio deactivated: 0
+[ 1385.094299] pgdat 1 folio promoted: 0
+[ 1385.094299] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000006b6c90c2, node=DRAM)
+[ 1385.094300] promote list empty
+[ 1385.094300] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000085e1b46e, node=DRAM)
+[ 1385.094301] pgdat 1 scanned 0 on promote list
+[ 1385.094302] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000035ac0fb4, node=DRAM)
+[ 1385.094302] pgdat 1 taken 0 on promote list
+[ 1385.094304] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000017b746fb, node=DRAM)
+[ 1385.094304] pgdat 1 folio activated: 0
+[ 1385.094305] pgdat 1 folio deactivated: 0
+[ 1385.094306] pgdat 1 folio promoted: 0
+[ 1385.094306] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000814ebe0c, node=DRAM)
+[ 1385.094307] promote list empty
+[ 1385.094308] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000fe62c318, node=DRAM)
+[ 1385.094309] pgdat 1 scanned 0 on promote list
+[ 1385.094309] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000fb9f3f3b, node=DRAM)
+[ 1385.094310] pgdat 1 taken 0 on promote list
+[ 1385.094311] pgdat 1 folio activated: 0
+[ 1385.094311] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000449357ae, node=DRAM)
+[ 1385.094312] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000005c8e6886, node=DRAM)
+[ 1385.094313] pgdat 1 folio deactivated: 0
+[ 1385.094313] pgdat 1 folio promoted: 0
+[ 1385.094314] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000060a1ead8, node=DRAM)
+[ 1385.094315] promote list empty
+[ 1385.094315] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000efabb677, node=DRAM)
+[ 1385.094316] pgdat 1 scanned 0 on promote list
+[ 1385.094317] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000098866456, node=DRAM)
+[ 1385.094318] pgdat 1 taken 0 on promote list
+[ 1385.094318] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000006512cfc8, node=DRAM)
+[ 1385.094319] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000032172cb7, node=DRAM)
+[ 1385.094319] pgdat 1 folio activated: 0
+[ 1385.094320] pgdat 1 folio deactivated: 0
+[ 1385.094321] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000ea2762c1, node=DRAM)
+[ 1385.094321] pgdat 1 folio promoted: 0
+[ 1385.094322] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000b01ca5ef, node=DRAM)
+[ 1385.094323] promote list empty
+[ 1385.094323] pgdat 1 scanned 0 on promote list
+[ 1385.094324] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000392add8d, node=DRAM)
+[ 1385.094325] pgdat 1 taken 0 on promote list
+[ 1385.094325] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000002ecca92b, node=DRAM)
+[ 1385.094326] pgdat 1 folio activated: 0
+[ 1385.094326] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000031e128b1, node=DRAM)
+[ 1385.094328] pgdat 1 folio deactivated: 0
+[ 1385.094328] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000593266cc, node=DRAM)
+[ 1385.094329] pgdat 1 folio promoted: 0
+[ 1385.094330] promote list empty
+[ 1385.094330] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000ee8d117e, node=DRAM)
+[ 1385.094331] pgdat 1 scanned 0 on promote list
+[ 1385.094331] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000031f2fbd3, node=DRAM)
+[ 1385.094332] pgdat 1 taken 0 on promote list
+[ 1385.094333] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000055e84527, node=DRAM)
+[ 1385.094334] pgdat 1 folio activated: 0
+[ 1385.094334] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000008d2ff7e5, node=DRAM)
+[ 1385.094335] pgdat 1 folio deactivated: 0
+[ 1385.094336] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000ab21f204, node=DRAM)
+[ 1385.094336] pgdat 1 folio promoted: 0
+[ 1385.094337] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000038d17abe, node=DRAM)
+[ 1385.094338] promote list empty
+[ 1385.094338] pgdat 0 MIGRATION DISABLED - would have migrated 32 folios from inactive list
+[ 1385.094339] pgdat 1 scanned 0 on promote list
+[ 1385.094340] pgdat 1 taken 0 on promote list
+[ 1385.094341] pgdat 1 folio activated: 0
+[ 1385.094341] pgdat 1 folio deactivated: 0
+[ 1385.094342] pgdat 1 folio promoted: 0
+[ 1385.094342] pgdat 0 folio activated: 0
+[ 1385.094342] promote list empty
+[ 1385.094343] pgdat 1 scanned 0 on promote list
+[ 1385.094344] pgdat 0 folio deactivated: 0
+[ 1385.094344] pgdat 0 folio promoted: 0
+[ 1385.094345] pgdat 1 taken 0 on promote list
+[ 1385.094346] promote list empty
+[ 1385.094346] pgdat 1 folio activated: 0
+[ 1385.094347] pgdat 0 scanned 0 on promote list
+[ 1385.094347] pgdat 1 folio deactivated: 0
+[ 1385.094349] pgdat 1 folio promoted: 0
+[ 1385.094349] pgdat 0 taken 0 on promote list
+[ 1385.094350] pgdat 0 folio activated: 0
+[ 1385.094350] pgdat 0 folio deactivated: 0
+[ 1385.094351] pgdat 0 folio promoted: 0
+[ 1385.094360] promote list empty
+[ 1385.094360] promote list empty
+[ 1385.094361] pgdat 1 scanned 0 on promote list
+[ 1385.094362] pgdat 1 taken 0 on promote list
+[ 1385.094362] pgdat 0 scanned 0 on promote list
+[ 1385.094363] pgdat 0 taken 0 on promote list
+[ 1385.094366] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000f93c52f5, node=DRAM)
+[ 1385.094366] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000005ef92afe, node=DRAM)
+[ 1385.094367] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000005c4d9081, node=DRAM)
+[ 1385.094367] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000390d769e, node=DRAM)
+[ 1385.094368] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000537034f8, node=DRAM)
+[ 1385.094368] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000096cdf187, node=DRAM)
+[ 1385.094369] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000058ad3ed9, node=DRAM)
+[ 1385.094369] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000005fc866f3, node=DRAM)
+[ 1385.094370] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000008557caa8, node=DRAM)
+[ 1385.094370] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000b2a44528, node=DRAM)
+[ 1385.094371] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000000cf47000, node=DRAM)
+[ 1385.094372] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000215bb7cb, node=DRAM)
+[ 1385.094372] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000052b28898, node=DRAM)
+[ 1385.094373] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000025793d02, node=DRAM)
+[ 1385.094373] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000007cdca05a, node=DRAM)
+[ 1385.094374] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000005d92003e, node=DRAM)
+[ 1385.094374] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000596b6560, node=DRAM)
+[ 1385.094375] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000002af8aece, node=DRAM)
+[ 1385.094375] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000791214a9, node=DRAM)
+[ 1385.094376] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000457ec14d, node=DRAM)
+[ 1385.094377] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000008b75fc32, node=DRAM)
+[ 1385.094377] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000dc68d976, node=DRAM)
+[ 1385.094378] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000ea4931f4, node=DRAM)
+[ 1385.094378] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000008adcc306, node=DRAM)
+[ 1385.094379] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000008a5fe267, node=DRAM)
+[ 1385.094379] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000039cff39b, node=DRAM)
+[ 1385.094381] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000ec0ce0ad, node=DRAM)
+[ 1385.094381] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000007b23f598, node=DRAM)
+[ 1385.094382] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000003d15439d, node=DRAM)
+[ 1385.094382] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000003b963f76, node=DRAM)
+[ 1385.094383] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000003c906fb9, node=DRAM)
+[ 1385.094383] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000bec15bda, node=DRAM)
+[ 1385.094384] pgdat 0 MIGRATION DISABLED - would have migrated 32 folios from inactive list
+[ 1385.094386] pgdat 0 folio activated: 0
+[ 1385.094386] pgdat 0 folio deactivated: 0
+[ 1385.094387] pgdat 0 folio promoted: 0
+[ 1385.094387] promote list empty
+[ 1385.094388] pgdat 0 scanned 0 on promote list
+[ 1385.094388] pgdat 0 taken 0 on promote list
+[ 1385.094389] pgdat 0 folio activated: 0
+[ 1385.094389] pgdat 0 folio deactivated: 0
+[ 1385.094389] pgdat 0 folio promoted: 0
+[ 1385.094390] promote list empty
+[ 1385.094390] pgdat 0 scanned 0 on promote list
+[ 1385.094391] pgdat 0 taken 0 on promote list
+[ 1385.094391] pgdat 0 folio activated: 0
+[ 1385.094391] pgdat 0 folio deactivated: 0
+[ 1385.094392] pgdat 0 folio promoted: 0
+[ 1385.094392] promote list empty
+[ 1385.094393] pgdat 0 scanned 0 on promote list
+[ 1385.094393] pgdat 0 taken 0 on promote list
+[ 1385.094394] pgdat 0 folio activated: 0
+[ 1385.094394] pgdat 0 folio deactivated: 0
+[ 1385.094394] pgdat 0 folio promoted: 0
+[ 1385.094395] promote list empty
+[ 1385.094395] pgdat 0 scanned 0 on promote list
+[ 1385.094396] pgdat 0 taken 0 on promote list
+[ 1385.094399] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000145ec71b, node=DRAM)
+[ 1385.094399] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e11a8b3f, node=DRAM)
+[ 1385.094400] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000a8f118e, node=DRAM)
+[ 1385.094400] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005cfd4581, node=DRAM)
+[ 1385.094401] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000097962cd2, node=DRAM)
+[ 1385.094401] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000f8a366bf, node=DRAM)
+[ 1385.094402] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000008c9a1b4, node=DRAM)
+[ 1385.094402] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000001ae77bbb, node=DRAM)
+[ 1385.094403] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000082a3305e, node=DRAM)
+[ 1385.094403] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000021057f82, node=DRAM)
+[ 1385.094404] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000463f731a, node=DRAM)
+[ 1385.094404] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b9dd89aa, node=DRAM)
+[ 1385.094405] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b280a66d, node=DRAM)
+[ 1385.094405] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000001b596d1b, node=DRAM)
+[ 1385.094406] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000034dc3e78, node=DRAM)
+[ 1385.094406] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ea121f83, node=DRAM)
+[ 1385.094407] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005fd2a716, node=DRAM)
+[ 1385.094407] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000002ed91201, node=DRAM)
+[ 1385.094408] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000606b93c0, node=DRAM)
+[ 1385.094408] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000089a568fb, node=DRAM)
+[ 1385.094409] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ef476741, node=DRAM)
+[ 1385.094409] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004121db35, node=DRAM)
+[ 1385.094410] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000050fbe2af, node=DRAM)
+[ 1385.094410] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000069f670fd, node=DRAM)
+[ 1385.094411] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d1de0c2d, node=DRAM)
+[ 1385.094411] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000076698f9c, node=DRAM)
+[ 1385.094412] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000009b9fa63b, node=DRAM)
+[ 1385.094412] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000a49e439c, node=DRAM)
+[ 1385.094412] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000009a1f8914, node=DRAM)
+[ 1385.094413] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005bbe2fbb, node=DRAM)
+[ 1385.094413] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000cbf15095, node=DRAM)
+[ 1385.094414] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e244c0c7, node=DRAM)
+[ 1385.094414] pgdat 0 MIGRATION DISABLED - would have migrated 32 folios from inactive list
+[ 1385.094416] pgdat 0 folio activated: 0
+[ 1385.094417] pgdat 0 folio deactivated: 0
+[ 1385.094417] pgdat 0 folio promoted: 0
+[ 1385.094418] promote list empty
+[ 1385.094418] pgdat 0 scanned 0 on promote list
+[ 1385.094418] pgdat 0 taken 0 on promote list
+[ 1385.094419] pgdat 0 folio activated: 0
+[ 1385.094419] pgdat 0 folio deactivated: 0
+[ 1385.094420] pgdat 0 folio promoted: 0
+[ 1385.094420] promote list empty
+[ 1385.094420] pgdat 0 scanned 0 on promote list
+[ 1385.094421] pgdat 0 taken 0 on promote list
+[ 1385.094421] pgdat 0 folio activated: 0
+[ 1385.094422] pgdat 0 folio deactivated: 0
+[ 1385.094422] pgdat 0 folio promoted: 0
+[ 1385.094423] promote list empty
+[ 1385.094423] pgdat 0 scanned 0 on promote list
+[ 1385.094423] pgdat 0 taken 0 on promote list
+[ 1385.094424] pgdat 0 folio activated: 0
+[ 1385.094424] pgdat 0 folio deactivated: 0
+[ 1385.094425] pgdat 0 folio promoted: 0
+[ 1385.094425] promote list empty
+[ 1385.094426] pgdat 0 scanned 0 on promote list
+[ 1385.094426] pgdat 0 taken 0 on promote list
+[ 1385.094429] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000063cc10c7, node=DRAM)
+[ 1385.094429] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000059ff7343, node=DRAM)
+[ 1385.094430] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000427bdf41, node=DRAM)
+[ 1385.094430] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000af07ad45, node=DRAM)
+[ 1385.094431] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000000d7ed22a, node=DRAM)
+[ 1385.094431] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000003c2c573b, node=DRAM)
+[ 1385.094432] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000007f1d783e, node=DRAM)
+[ 1385.094432] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000001c1dcc4b, node=DRAM)
+[ 1385.094433] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000ad9addd7, node=DRAM)
+[ 1385.094433] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000064d52fc, node=DRAM)
+[ 1385.094434] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000022662b5b, node=DRAM)
+[ 1385.094434] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000006333b2c, node=DRAM)
+[ 1385.094435] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000007ea228ad, node=DRAM)
+[ 1385.094435] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000e3ebf1aa, node=DRAM)
+[ 1385.094436] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000da6c42f3, node=DRAM)
+[ 1385.094437] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d1ae131a, node=DRAM)
+[ 1385.094437] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000765f0423, node=DRAM)
+[ 1385.094437] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000b4111794, node=DRAM)
+[ 1385.094438] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000000f68290d, node=DRAM)
+[ 1385.094439] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000016f4f6a9, node=DRAM)
+[ 1385.094439] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000bddda90b, node=DRAM)
+[ 1385.094439] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000277b215e, node=DRAM)
+[ 1385.094440] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d3cc6576, node=DRAM)
+[ 1385.094440] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000990a2e2b, node=DRAM)
+[ 1385.094441] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ce8e4d30, node=DRAM)
+[ 1385.094441] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005e339d7f, node=DRAM)
+[ 1385.094442] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000004155bea9, node=DRAM)
+[ 1385.094442] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000040e326dd, node=DRAM)
+[ 1385.094443] pgdat 0 MIGRATION DISABLED - would have migrated 28 folios from inactive list
+[ 1385.094445] pgdat 0 folio activated: 0
+[ 1385.094445] pgdat 0 folio deactivated: 0
+[ 1385.094445] pgdat 0 folio promoted: 0
+[ 1385.094446] promote list empty
+[ 1385.094446] pgdat 0 scanned 0 on promote list
+[ 1385.094447] pgdat 0 taken 0 on promote list
+[ 1385.094447] pgdat 0 folio activated: 0
+[ 1385.094448] pgdat 0 folio deactivated: 0
+[ 1385.094448] pgdat 0 folio promoted: 0
+[ 1385.094449] promote list empty
+[ 1385.094449] pgdat 0 scanned 0 on promote list
+[ 1385.094449] pgdat 0 taken 0 on promote list
+[ 1385.094451] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000002847c30f, node=DRAM)
+[ 1385.094452] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000c89153fd, node=DRAM)
+[ 1385.094452] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000eeeea582, node=DRAM)
+[ 1385.094453] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000004d948c2d, node=DRAM)
+[ 1385.094453] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000012ee8096, node=DRAM)
+[ 1385.094454] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000a3017cb5, node=DRAM)
+[ 1385.094454] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000007e053e78, node=DRAM)
+[ 1385.094455] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000f330d098, node=DRAM)
+[ 1385.094455] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000000a062f9a, node=DRAM)
+[ 1385.094456] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=000000001fdad63f, node=DRAM)
+[ 1385.094456] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000a5cca02b, node=DRAM)
+[ 1385.094457] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=00000000e3448f6e, node=DRAM)
+[ 1385.094457] Page access MONITOR at inactive_list_scan: was_accessed=1 (folio=0000000041a95f92, node=DRAM)
+[ 1385.094458] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000005b9e6321, node=DRAM)
+[ 1385.094458] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000040109f2d, node=DRAM)
+[ 1385.094459] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000007505b1ce, node=DRAM)
+[ 1385.094459] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=0000000015456898, node=DRAM)
+[ 1385.094460] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000ac353e88, node=DRAM)
+[ 1385.094460] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000bd5a3090, node=DRAM)
+[ 1385.094461] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000f25d60e0, node=DRAM)
+[ 1385.094461] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=000000003cc356b3, node=DRAM)
+[ 1385.094461] Page access MONITOR at inactive_list_scan: was_accessed=0 (folio=00000000d433eafa, node=DRAM)
+[ 1385.094462] pgdat 0 MIGRATION DISABLED - would have migrated 22 folios from inactive list
+[ 1385.094464] pgdat 0 folio activated: 0
+[ 1385.094464] pgdat 0 folio deactivated: 0
+[ 1385.094464] pgdat 0 folio promoted: 0
+[ 1385.094465] promote list empty
+[ 1385.094465] pgdat 0 scanned 0 on promote list
+[ 1385.094465] pgdat 0 taken 0 on promote list
+[ 1385.094466] pgdat 0 folio activated: 0
+[ 1385.094467] pgdat 0 folio deactivated: 0
+[ 1385.094467] pgdat 0 folio promoted: 0
+[ 1385.094467] promote list empty
+[ 1385.094468] pgdat 0 scanned 0 on promote list
+[ 1385.094468] pgdat 0 taken 0 on promote list
+[ 1385.094468] pgdat 0 folio activated: 0
+[ 1385.094469] pgdat 0 folio deactivated: 0
+[ 1385.094469] pgdat 0 folio promoted: 0
+[ 1385.094470] promote list empty
+[ 1385.094470] pgdat 0 scanned 0 on promote list
+[ 1385.094470] pgdat 0 taken 0 on promote list
+[ 1385.094471] pgdat 0 folio activated: 0
+[ 1385.094471] pgdat 0 folio deactivated: 0
+[ 1385.094472] pgdat 0 folio promoted: 0
+[ 1385.094472] promote list empty
+[ 1385.094472] pgdat 0 scanned 0 on promote list
+[ 1385.094473] pgdat 0 taken 0 on promote list
+[ 1385.094473] pgdat 0 folio activated: 0
+[ 1385.094474] pgdat 0 folio deactivated: 0
+[ 1385.094474] pgdat 0 folio promoted: 0
+[ 1385.094474] promote list empty
+[ 1385.094475] pgdat 0 scanned 0 on promote list
+[ 1385.094475] pgdat 0 taken 0 on promote list
+[ 1385.094476] pgdat 0 folio activated: 0
+[ 1385.094476] pgdat 0 folio deactivated: 0
+[ 1385.094477] pgdat 0 folio promoted: 0
+[ 1385.094478] promote list empty
+[ 1385.094479] pgdat 0 scanned 0 on promote list
+[ 1385.094479] pgdat 0 taken 0 on promote list
+[ 1385.094480] pgdat 0 folio activated: 0
+[ 1385.094481] pgdat 0 folio deactivated: 0
+[ 1385.094482] pgdat 0 folio promoted: 0
+[ 1385.094483] promote list empty
+[ 1385.094483] pgdat 0 scanned 0 on promote list
+[ 1385.094484] pgdat 0 taken 0 on promote list
+[ 1385.094557] systemd-journald[413]: /dev/kmsg buffer overrun, some messages lost.
