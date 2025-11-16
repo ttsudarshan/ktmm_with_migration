@@ -242,8 +242,8 @@ static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, co
     
     if (was_accessed) {
         /* Print the access information */
-        printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, jiffies=%lu) ***\n", 
-                 location, folio, node_type, jiffies);
+        // printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, jiffies=%lu) ***\n", 
+        //          location, folio, node_type, jiffies);
         
         /* Immediately clear the bit after printing so we don't print it again in the same scan */
         folio_clear_referenced(folio);
@@ -425,6 +425,61 @@ static inline bool ktmm_folio_needs_release(struct folio *folio)
 
 	return folio_has_private(folio) || (mapping && mapping_release_always(mapping));
 }
+
+/**
+ * ktmm_migrate_folio_manual - manually migrate a single folio to target node
+ * Following the exact pattern from migration.c for kernel 5.3
+ * 
+ * @folio: folio to migrate
+ * @target_node: destination NUMA node
+ * @pgdat: page data structure
+ *
+ * Returns: 0 on success, negative error code on failure
+ */
+static int ktmm_migrate_folio_manual(struct folio *folio, int target_node, struct pglist_data *pgdat)
+{
+	struct page *page = &folio->page;
+	struct page *newpage = NULL;
+	struct address_space *mapping;
+	int rc = -EINVAL;
+	
+	// Get the mapping (similar to migration.c line 93)
+	mapping = folio_mapping(folio);
+	if (!mapping) {
+		// No mapping, can't migrate
+		return -EINVAL;
+	}
+	
+	// Check if page is suitable for migration (basic checks from migration.c)
+	if (folio_test_unevictable(folio)) {
+		return -EINVAL;
+	}
+	
+	// Allocate new page on target node (migration.c line 146)
+	newpage = alloc_pages_node(target_node, GFP_HIGHUSER_MOVABLE, 0);
+	if (!newpage) {
+		return -ENOMEM;
+	}
+	
+	// Try migration via mapping->a_ops->migratepage if available (migration.c line 153)
+	if (mapping->a_ops && mapping->a_ops->migrate_folio) {
+		rc = mapping->a_ops->migrate_folio(mapping, folio_folio(newpage), folio, MIGRATE_SYNC);
+		
+		if (rc == MIGRATEPAGE_SUCCESS) {
+			// Success! Don't free newpage, ownership transferred
+			return 0;
+		} else {
+			// Failed, free newpage and return error
+			__free_pages(newpage, 0);
+			return rc;
+		}
+	}
+	
+	// If no migrate_folio operation, free newpage and fail
+	__free_pages(newpage, 0);
+	return -ENOSYS;
+}
+
 /**
  * ktmm_alloc_migration_target - allocate page on target node for migration
  * @page: page being migrated (not used)
@@ -432,11 +487,6 @@ static inline bool ktmm_folio_needs_release(struct folio *folio)
  *
  * Returns newly allocated page on target node
  */
-static struct page *ktmm_alloc_migration_target(struct page *page, unsigned long private)
-{
-	int nid = *(int *)private;
-	return alloc_pages_node(nid, GFP_HIGHUSER_MOVABLE, 0);
-}
 
 /**
  * scan_promote_list - scan promote lru folios for migration
@@ -491,24 +541,38 @@ static void scan_promote_list(unsigned long nr_to_scan,
 	// pr_debug("pgdat %d taken %lu on promote list", nid, nr_taken);
 
 	/* ADDED: Track access patterns for each folio in promote list */
-	if (!list_empty(&l_hold)) {
+	// DISABLED: Too much console output
+	// if (!list_empty(&l_hold)) {
+	// 	struct folio *folio, *next;
+	// 	
+	// 	list_for_each_entry_safe(folio, next, &l_hold, lru) {
+	// 		/* Track access pattern for debugging/monitoring */
+	// 		track_folio_access(folio, pgdat, "PROMOTE_LIST");
+	// 	}
+	// }
+
+	// Manual migration following migration.c pattern
+	// Migrate page-by-page from PMEM to DRAM
+	if (nr_taken > 0) {
 		struct folio *folio, *next;
+		int target_node = 0;  // DRAM node
+		int migrated_count = 0;
 		
 		list_for_each_entry_safe(folio, next, &l_hold, lru) {
-			/* Track access pattern for debugging/monitoring */
-			track_folio_access(folio, pgdat, "PROMOTE_LIST");
+			int rc = ktmm_migrate_folio_manual(folio, target_node, pgdat);
+			if (rc == 0) {
+				migrated_count++;
+				// Remove from list since migration succeeded
+				list_del(&folio->lru);
+			}
+			// If migration fails, leave it in list to be put back
 		}
-	}
-
-	if (nr_taken) {
-		unsigned int succeeded;
-		int target_node = 0;  // DRAM node
-		int ret = migrate_pages(&l_hold, ktmm_alloc_migration_target,
-				NULL, (unsigned long)&target_node, MIGRATE_SYNC, MR_MEMORY_HOTPLUG, &succeeded);
-		nr_migrated = (ret < 0 ? 0 : nr_taken - ret);
-		__mod_node_page_state(pgdat, NR_PROMOTED, nr_migrated);
-
-		pr_debug("pgdat %d migrated %lu folios from promote list", nid, nr_migrated);
+		
+		nr_migrated = migrated_count;
+		if (nr_migrated > 0) {
+			__mod_node_page_state(pgdat, NR_PROMOTED, nr_migrated);
+			pr_info("pgdat %d PROMOTED %d folios from PMEM to DRAM", nid, nr_migrated);
+		}
 	}
 	spin_lock_irq(&lruvec->lru_lock);
 
@@ -710,24 +774,39 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	if (nr_taken == 0) return 0;
 
 	/* ADDED: Track access patterns for each folio in inactive list */
-	if (!list_empty(&folio_list)) {
-		struct folio *folio, *next;
-		
-		list_for_each_entry_safe(folio, next, &folio_list, lru) {
-			/* Track access pattern for debugging/monitoring */
-			track_folio_access(folio, pgdat, "INACTIVE_LIST");
-		}
-	}
+	// DISABLED: Too much console output
+	// if (!list_empty(&folio_list)) {
+	// 	struct folio *folio, *next;
+	// 	
+	// 	list_for_each_entry_safe(folio, next, &folio_list, lru) {
+	// 		/* Track access pattern for debugging/monitoring */
+	// 		track_folio_access(folio, pgdat, "INACTIVE_LIST");
+	// 	}
+	// }
 
 	//migrate pages down to the pmem node
+	// Manual migration following migration.c pattern
+	// Migrate page-by-page from DRAM to PMEM
 	if (pgdat->pm_node == 0 && pmem_node_id != -1) {
-		unsigned int succeeded;
+		struct folio *folio, *next;
 		int target_node = pmem_node_id;  // PMEM node
-		int ret = migrate_pages(&folio_list, ktmm_alloc_migration_target, NULL, 
-					(unsigned long)&target_node, MIGRATE_SYNC, MR_MEMORY_HOTPLUG, &succeeded);
-		nr_migrated = (ret >= 0 ? nr_taken - ret : 0);
-		pr_debug("pgdat %d migrated %lu folios from inactive list", nid, nr_migrated);
-		__mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
+		int migrated_count = 0;
+		
+		list_for_each_entry_safe(folio, next, &folio_list, lru) {
+			int rc = ktmm_migrate_folio_manual(folio, target_node, pgdat);
+			if (rc == 0) {
+				migrated_count++;
+				// Remove from list since migration succeeded
+				list_del(&folio->lru);
+			}
+			// If migration fails, leave it in list to be put back
+		}
+		
+		nr_migrated = migrated_count;
+		if (nr_migrated > 0) {
+			__mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
+			pr_info("pgdat %d DEMOTED %d folios from DRAM to PMEM", nid, nr_migrated);
+		}
 	}
   
 	spin_lock_irq(&lruvec->lru_lock);
