@@ -240,14 +240,14 @@ static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, co
     /* Check the referenced flag */
     was_accessed = folio_test_referenced(folio);
     
-    // if (was_accessed) {
-    //     /* Print the access information */
-    //     // printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, jiffies=%lu) ***\n", 
-    //     //          location, folio, node_type, jiffies);
+    if (was_accessed) {
+        /* Print the access information */
+        // printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, jiffies=%lu) ***\n", 
+        //          location, folio, node_type, jiffies);
         
-    //     /* Immediately clear the bit after printing so we don't print it again in the same scan */
-    //     folio_clear_referenced(folio);
-    // } 
+        /* Immediately clear the bit after printing so we don't print it again in the same scan */
+        folio_clear_referenced(folio);
+    } 
     //else {
     //     printk(KERN_INFO "Not accessed at %s: referenced_bit=0 (folio=%p, node=%s, jiffies=%lu)\n", 
     //              location, folio, node_type, jiffies);
@@ -915,7 +915,7 @@ static void scan_node(pg_data_t *pgdat,
 		scanned = sc->nr_scanned;
 
 		for_each_evictable_lru(lru) {
-			unsigned long nr_to_scan = 1024;  //3000000//sudarshan changed this to 256 for better page access detection
+			unsigned long nr_to_scan = 3000000;  //3000000//sudarshan changed this to 256 for better page access detection
 
 			scan_list(lru, nr_to_scan, lruvec, sc, pgdat);
 			
