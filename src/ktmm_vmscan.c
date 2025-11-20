@@ -6,8 +6,6 @@
 
 //#define pr_fmt(fmt) "[ KTMM Mod ] vmscan - " fmt
 
-//trying to implement hashtable
-
 #include <linux/atomic.h>
 #include <linux/bitops.h>
 #include <linux/buffer_head.h>
@@ -59,6 +57,18 @@ static struct task_struct *tmemd_list[MAX_NUMNODES];
 /* per node tmemd wait queues */
 wait_queue_head_t tmemd_wait[MAX_NUMNODES];
 
+/************** PAGE ACCESS TRACKING HASHTABLE ******************************/
+/* Hashtable to track first access time of pages */
+#define PAGE_ACCESS_HASH_BITS 16  /* 2^16 = 65536 buckets */
+static DEFINE_HASHTABLE(page_access_hash, PAGE_ACCESS_HASH_BITS);
+static DEFINE_SPINLOCK(page_access_lock);  /* Spinlock for hashtable access */
+
+/* Structure to store page access information in hashtable */
+struct page_access_entry {
+	struct hlist_node hash_node;    /* Hash list node */
+	unsigned long pfn;               /* Page frame number as key */
+	unsigned long first_access_jiffies;  /* Jiffies when first accessed */
+};
 
 /************** MISC HOOKED FUNCTION PROTOTYPES *****************************/
 static struct mem_cgroup *(*pt_mem_cgroup_iter)(struct mem_cgroup *root,
@@ -215,7 +225,6 @@ static int ktmm_folio_referenced(struct folio *folio, int is_locked,
 	return pt_folio_referenced(folio, is_locked, memcg, vm_flags);
 }
 
-
 /*****************************************************************************
  * Page Access Tracking Helper Functions
  *****************************************************************************/
@@ -233,19 +242,60 @@ static int ktmm_folio_referenced(struct folio *folio, int is_locked,
  * it prints the access information and immediately clears the bit.
  * This way, if the same folio is checked again in the same scan cycle,
  * it won't show as accessed again (avoiding duplicate logging).
+ * 
+ * Now also tracks first access time using a hashtable to display both
+ * current jiffies and first access jiffies.
  */
 static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, const char *location)
 {
     int was_accessed;
     const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
+    unsigned long pfn;
+    struct page_access_entry *entry;
+    unsigned long first_access_jiffies = 0;
+    unsigned long current_jiffies;
+    bool found = false;
     
     /* Check the referenced flag */
     was_accessed = folio_test_referenced(folio);
     
     if (was_accessed) {
-        /* Print the access information */
-        // printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, jiffies=%lu) ***\n", 
-        //          location, folio, node_type, jiffies);
+        current_jiffies = jiffies;
+        
+        /* Get the page frame number for the folio */
+        pfn = folio_pfn(folio);
+        
+        /* Lock the hashtable for thread-safe access */
+        spin_lock(&page_access_lock);
+        
+        /* Search for existing entry in the hashtable */
+        hash_for_each_possible(page_access_hash, entry, hash_node, pfn) {
+            if (entry->pfn == pfn) {
+                first_access_jiffies = entry->first_access_jiffies;
+                found = true;
+                break;
+            }
+        }
+        
+        /* If not found, add new entry with current jiffies as first access */
+        if (!found) {
+            entry = kmalloc(sizeof(*entry), GFP_ATOMIC);
+            if (entry) {
+                entry->pfn = pfn;
+                entry->first_access_jiffies = current_jiffies;
+                hash_add(page_access_hash, &entry->hash_node, pfn);
+                first_access_jiffies = current_jiffies;
+            } else {
+                printk(KERN_WARNING "Failed to allocate memory for page access entry\n");
+            }
+        }
+        
+        spin_unlock(&page_access_lock);
+        
+        /* Print the access information with both current and first access jiffies */
+        printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, current_jiffies=%lu, first_access_jiffies=%lu, access_age=%lu) ***\n", 
+                 location, folio, node_type, current_jiffies, first_access_jiffies, 
+                 (current_jiffies - first_access_jiffies));
         
         /* Immediately clear the bit after printing so we don't print it again in the same scan */
         folio_clear_referenced(folio);
@@ -428,67 +478,6 @@ static inline bool ktmm_folio_needs_release(struct folio *folio)
 	return folio_has_private(folio) || (mapping && mapping_release_always(mapping));
 }
 
-/**
- * ktmm_migrate_folio_manual - manually migrate a single folio to target node
- * Following the exact pattern from migration.c for kernel 5.3
- * 
- * @folio: folio to migrate
- * @target_node: destination NUMA node
- * @pgdat: page data structure
- *
- * Returns: 0 on success, negative error code on failure
- */
-static int ktmm_migrate_folio_manual(struct folio *folio, int target_node, struct pglist_data *pgdat)
-{
-	struct page *page = &folio->page;
-	struct page *newpage = NULL;
-	struct address_space *mapping;
-	int rc = -EINVAL;
-	
-	// Get the mapping (similar to migration.c line 93)
-	mapping = folio_mapping(folio);
-	if (!mapping) {
-		// No mapping, can't migrate
-		return -EINVAL;
-	}
-	
-	// Check if page is suitable for migration (basic checks from migration.c)
-	if (folio_test_unevictable(folio)) {
-		return -EINVAL;
-	}
-	
-	// Allocate new page on target node (migration.c line 146)
-	newpage = alloc_pages_node(target_node, GFP_HIGHUSER_MOVABLE, 0);
-	if (!newpage) {
-		return -ENOMEM;
-	}
-	
-	// Try migration via mapping->a_ops->migratepage if available (migration.c line 153)
-	if (mapping->a_ops && mapping->a_ops->migrate_folio) {
-		rc = mapping->a_ops->migrate_folio(mapping, page_folio(newpage), folio, MIGRATE_SYNC);
-		
-		if (rc == MIGRATEPAGE_SUCCESS) {
-			// Success! Don't free newpage, ownership transferred
-			return 0;
-		} else {
-			// Failed, free newpage and return error
-			__free_pages(newpage, 0);
-			return rc;
-		}
-	}
-	
-	// If no migrate_folio operation, free newpage and fail
-	__free_pages(newpage, 0);
-	return -ENOSYS;
-}
-
-/**
- * ktmm_alloc_migration_target - allocate page on target node for migration
- * @page: page being migrated (not used)
- * @private: pointer to target node ID
- *
- * Returns newly allocated page on target node
- */
 
 /**
  * scan_promote_list - scan promote lru folios for migration
@@ -543,39 +532,32 @@ static void scan_promote_list(unsigned long nr_to_scan,
 	// pr_debug("pgdat %d taken %lu on promote list", nid, nr_taken);
 
 	/* ADDED: Track access patterns for each folio in promote list */
-	// DISABLED: Too much console output
-	// if (!list_empty(&l_hold)) {
-	// 	struct folio *folio, *next;
-	// 	
-	// 	list_for_each_entry_safe(folio, next, &l_hold, lru) {
-	// 		/* Track access pattern for debugging/monitoring */
-	// 		track_folio_access(folio, pgdat, "PROMOTE_LIST");
-	// 	}
-	// }
-
-	// Manual migration folio by folio
-	// Migrate page-by-page from PMEM to DRAM
-	if (nr_taken > 0) {
+	if (!list_empty(&l_hold)) {
 		struct folio *folio, *next;
-		int target_node = 0;  // DRAM node
-		int migrated_count = 0;
 		
 		list_for_each_entry_safe(folio, next, &l_hold, lru) {
-			int rc = ktmm_migrate_folio_manual(folio, target_node, pgdat);
-			if (rc == 0) {
-				migrated_count++;
-				// Remove from list since migration succeeded
-				list_del(&folio->lru);
-			}
-			// If migration fails, leave it in list to be put back
-		}
-		
-		nr_migrated = migrated_count;
-		if (nr_migrated > 0) {
-			__mod_node_page_state(pgdat, NR_PROMOTED, nr_migrated);
-			pr_info("pgdat %d PROMOTED %lu folios from PMEM to DRAM", nid, nr_migrated);
+			/* Track access pattern for debugging/monitoring */
+			track_folio_access(folio, pgdat, "PROMOTE_LIST");
 		}
 	}
+
+	// if (nr_taken) {
+	// 	unsigned int succeeded;
+	// 	int ret = migrate_pages(&l_hold, alloc_normal_page,
+	// 			NULL, 0, MIGRATE_SYNC, MR_MEMORY_HOTPLUG, &succeeded);
+	// 	nr_migrated = (ret < 0 ? 0 : nr_taken - ret);
+	// 	__mod_node_page_state(pgdat, NR_PROMOTED, nr_migrated);
+
+	// 	pr_debug("pgdat %d migrated %lu folios from promote list", nid, nr_migrated);
+	// }
+  
+
+  //dummy code
+  if (nr_taken) {
+    nr_migrated = 0;  // No migration actually happens
+    // pr_debug("pgdat %d MIGRATION DISABLED - would have migrated %lu folios from promote list", nid, nr_taken);
+  }
+
 	spin_lock_irq(&lruvec->lru_lock);
 
 	ktmm_move_folios_to_lru(lruvec, &l_hold);
@@ -776,41 +758,30 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	if (nr_taken == 0) return 0;
 
 	/* ADDED: Track access patterns for each folio in inactive list */
-	// DISABLED: Too much console output
-	// if (!list_empty(&folio_list)) {
-	// 	struct folio *folio, *next;
-	// 	
-	// 	list_for_each_entry_safe(folio, next, &folio_list, lru) {
-	// 		/* Track access pattern for debugging/monitoring */
-	// 		track_folio_access(folio, pgdat, "INACTIVE_LIST");
-	// 	}
-	// }
-
-	//migrate pages down to the pmem node
-	// Manual migration following migration.c pattern
-	// Migrate page-by-page from DRAM to PMEM
-	if (pgdat->pm_node == 0 && pmem_node_id != -1) {
+	if (!list_empty(&folio_list)) {
 		struct folio *folio, *next;
-		int target_node = pmem_node_id;  // PMEM node
-		int migrated_count = 0;
 		
 		list_for_each_entry_safe(folio, next, &folio_list, lru) {
-			int rc = ktmm_migrate_folio_manual(folio, target_node, pgdat);
-			if (rc == 0) {
-				migrated_count++;
-				// Remove from list since migration succeeded
-				list_del(&folio->lru);
-			}
-			// If migration fails, leave it in list to be put back
-		}
-		
-		nr_migrated = migrated_count;
-		if (nr_migrated > 0) {
-			__mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
-			pr_info("pgdat %d DEMOTED %lu folios from DRAM to PMEM", nid, nr_migrated);
+			/* Track access pattern for debugging/monitoring */
+			track_folio_access(folio, pgdat, "INACTIVE_LIST");
 		}
 	}
-  
+
+	//migrate pages down to the pmem node
+	// if (pgdat->pm_node == 0 && pmem_node_id != -1) {
+	// 	unsigned int succeeded;
+	// 	int ret = migrate_pages(&folio_list, alloc_pmem_page, NULL, 
+	// 				0, MIGRATE_SYNC, MR_MEMORY_HOTPLUG, &succeeded);
+	// 	nr_migrated = (ret >= 0 ? nr_taken - ret : 0);
+	// 	pr_debug("pgdat %d migrated %lu folios from inactive list", nid, nr_migrated);
+	// 	__mod_node_page_state(pgdat, NR_DEMOTED, nr_reclaimed);
+	// }
+//dummy code
+  if (pgdat->pm_node == 0 && pmem_node_id != -1) {
+    nr_migrated = 0;  // No migration actually happens
+    // pr_debug("pgdat %d MIGRATION DISABLED - would have migrated %lu folios from inactive list", nid, nr_taken);
+  }
+
 	spin_lock_irq(&lruvec->lru_lock);
 
 	ktmm_move_folios_to_lru(lruvec, &folio_list);
@@ -917,7 +888,7 @@ static void scan_node(pg_data_t *pgdat,
 		scanned = sc->nr_scanned;
 
 		for_each_evictable_lru(lru) {
-			unsigned long nr_to_scan = 3000000;  //3000000//sudarshan changed this to 256 for better page access detection
+			unsigned long nr_to_scan = 3000000;  //sudarshan changed this to 256 for better page access detection
 
 			scan_list(lru, nr_to_scan, lruvec, sc, pgdat);
 			
@@ -1078,6 +1049,10 @@ int tmemd_start_available(void)
 	int ret;
 
 	set_ktmm_scan();
+	
+	/* Initialize the page access tracking hashtable */
+	hash_init(page_access_hash);
+	printk(KERN_INFO "Page access tracking hashtable initialized\n");
 
 	/* initialize wait queues for sleeping */
 	for (i = 0; i < MAX_NUMNODES; i++)
@@ -1104,6 +1079,33 @@ int tmemd_start_available(void)
 
 
 /**
+ * page_access_hash_cleanup - cleanup the page access hashtable
+ * 
+ * This function frees all entries in the page access hashtable.
+ * Should be called when the module is unloaded.
+ */
+static void page_access_hash_cleanup(void)
+{
+	struct page_access_entry *entry;
+	struct hlist_node *tmp;
+	int bkt;
+	unsigned long entry_count = 0;
+	
+	spin_lock(&page_access_lock);
+	
+	/* Iterate through all buckets and free entries */
+	hash_for_each_safe(page_access_hash, bkt, tmp, entry, hash_node) {
+		hash_del(&entry->hash_node);
+		kfree(entry);
+		entry_count++;
+	}
+	
+	spin_unlock(&page_access_lock);
+	
+	printk(KERN_INFO "Page access hashtable cleaned up, freed %lu entries\n", entry_count);
+}
+
+/**
  * This stops all thread daemons for each node when exiting.
  * It uses the node ID to grab the daemon out of our local list.
  */
@@ -1117,4 +1119,7 @@ void tmemd_stop_all(void)
 	}
 
 	uninstall_hooks(vmscan_hooks, ARRAY_SIZE(vmscan_hooks));
+	
+	/* Clean up the page access tracking hashtable */
+	page_access_hash_cleanup();
 }
