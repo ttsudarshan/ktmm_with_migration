@@ -6,6 +6,8 @@
 
 //#define pr_fmt(fmt) "[ KTMM Mod ] vmscan - " fmt
 
+//trying to implement hashtable
+
 #include <linux/atomic.h>
 #include <linux/bitops.h>
 #include <linux/buffer_head.h>
