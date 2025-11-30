@@ -929,8 +929,8 @@ static void scan_node(pg_data_t *pgdat,
 	scan_end_time = ktime_get_ns();
 	total_scan_time_us = (scan_end_time - scan_start_time) / 1000;  /* Convert nanoseconds to microseconds */
 	
-	printk(KERN_INFO "*** SCAN_STATS (Node %d): Total Pages Scanned: %lu, Total Scan Time: %llu us ***\n", 
-	       nid, total_pages_scanned, total_scan_time_us);
+	// printk(KERN_INFO "*** SCAN_STATS (Node %d): Total Pages Scanned: %lu, Total Scan Time: %llu us ***\n", 
+	//        nid, total_pages_scanned, total_scan_time_us);
 }
 
 
