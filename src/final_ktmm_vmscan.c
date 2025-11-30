@@ -6,6 +6,7 @@
 
 //#define pr_fmt(fmt) "[ KTMM Mod ] vmscan - " fmt
 
+
 #include <linux/atomic.h>
 #include <linux/bitops.h>
 #include <linux/buffer_head.h>
@@ -915,7 +916,7 @@ static void scan_node(pg_data_t *pgdat,
 		scanned = sc->nr_scanned;
 
 		for_each_evictable_lru(lru) {
-			unsigned long nr_to_scan = 1024;  //3000000//sudarshan changed this to 256 for better page access detection
+			unsigned long nr_to_scan = 3000000;  //3000000//sudarshan changed this to 256 for better page access detection
 
 			scan_list(lru, nr_to_scan, lruvec, sc, pgdat);
 			

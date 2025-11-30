@@ -428,66 +428,99 @@ static inline bool ktmm_folio_needs_release(struct folio *folio)
 }
 
 /**
- * ktmm_migrate_folio_manual - manually migrate a single folio to target node
- * Following the exact pattern from migration.c for kernel 5.3
+ * ktmm_alloc_migration_target - allocate page on target node for migration
+ * @page: page being migrated (used to determine order for huge pages)
+ * @private: pointer to target node ID
+ *
+ * Returns newly allocated page on target node
+ * 
+ * This callback function is passed to migrate_pages() and is called
+ * for each page that needs migration.
+ */
+static struct page *ktmm_alloc_migration_target(struct page *page, unsigned long private)
+{
+	int target_node = (int)private;
+	gfp_t gfp_mask = GFP_HIGHUSER_MOVABLE | __GFP_NOWARN;
+	unsigned int order = 0;
+	
+	// Handle compound pages (huge pages)
+	if (PageCompound(page)) {
+		order = compound_order(page);
+	}
+	
+	return alloc_pages_node(target_node, gfp_mask, order);
+}
+
+/**
+ * ktmm_migrate_folio_manual - migrate a single folio to target node
+ * Using the kernel's migrate_pages() API for proper handling
  * 
  * @folio: folio to migrate
  * @target_node: destination NUMA node
- * @pgdat: page data structure
+ * @pgdat: page data structure (for debugging/logging)
  *
  * Returns: 0 on success, negative error code on failure
+ *
+ * This wrapper isolates a single folio and uses migrate_pages() which
+ * properly handles all the complex details of page migration including:
+ * - Locking
+ * - Reference counting  
+ * - Anonymous vs file-backed pages
+ * - Rmap updates
+ * - Page table updates
  */
 static int ktmm_migrate_folio_manual(struct folio *folio, int target_node, struct pglist_data *pgdat)
 {
-	struct page *page = &folio->page;
-	struct page *newpage = NULL;
-	struct address_space *mapping;
-	int rc = -EINVAL;
+	LIST_HEAD(pagelist);
+	int nr_failed = 0;
+	int nr_succeeded = 0;
+	int rc;
 	
-	// Get the mapping (similar to migration.c line 93)
-	mapping = folio_mapping(folio);
-	if (!mapping) {
-		// No mapping, can't migrate
-		return -EINVAL;
-	}
-	
-	// Check if page is suitable for migration (basic checks from migration.c)
+	// Check if page is suitable for migration
 	if (folio_test_unevictable(folio)) {
 		return -EINVAL;
 	}
 	
-	// Allocate new page on target node (migration.c line 146)
-	newpage = alloc_pages_node(target_node, GFP_HIGHUSER_MOVABLE, 0);
-	if (!newpage) {
-		return -ENOMEM;
+	// The folio should already be isolated from LRU by the caller
+	// Add it to our migration list
+	// Note: The folio is already in a list (l_hold or folio_list from caller)
+	// We need to temporarily move it to our pagelist for migration
+	
+	// Get a reference to ensure folio isn't freed during migration setup
+	folio_get(folio);
+	
+	// Create a temporary list with just this one folio
+	// migrate_pages() expects the pages to NOT be on LRU
+	INIT_LIST_HEAD(&pagelist);
+	list_add(&folio->lru, &pagelist);
+	
+	// Use kernel's migrate_pages() - this handles everything properly
+	// Parameters:
+	// - pagelist: list of pages to migrate
+	// - ktmm_alloc_migration_target: callback to allocate destination pages
+	// - NULL: no free function (we're using default)
+	// - target_node: passed to allocation callback
+	// - MIGRATE_SYNC: synchronous migration (wait for completion)
+	// - MR_NUMA_MISPLACED: reason for migration (for statistics)
+	// - &nr_succeeded: output - number of successfully migrated pages
+	rc = migrate_pages(&pagelist, ktmm_alloc_migration_target, NULL,
+			   (unsigned long)target_node, MIGRATE_SYNC,
+			   MR_NUMA_MISPLACED, &nr_succeeded);
+	
+	// Check results
+	if (list_empty(&pagelist)) {
+		// All pages migrated successfully
+		folio_put(folio);  // Drop our reference
+		return 0;
 	}
 	
-	// Try migration via mapping->a_ops->migratepage if available (migration.c line 153)
-	if (mapping->a_ops && mapping->a_ops->migrate_folio) {
-		rc = mapping->a_ops->migrate_folio(mapping, page_folio(newpage), folio, MIGRATE_SYNC);
-		
-		if (rc == MIGRATEPAGE_SUCCESS) {
-			// Success! Don't free newpage, ownership transferred
-			return 0;
-		} else {
-			// Failed, free newpage and return error
-			__free_pages(newpage, 0);
-			return rc;
-		}
-	}
+	// Migration failed - folio is back in pagelist
+	// Remove from our temporary list (caller will handle it)
+	list_del_init(&folio->lru);
+	folio_put(folio);  // Drop our reference
 	
-	// If no migrate_folio operation, free newpage and fail
-	__free_pages(newpage, 0);
-	return -ENOSYS;
+	return rc < 0 ? rc : -EAGAIN;
 }
-
-/**
- * ktmm_alloc_migration_target - allocate page on target node for migration
- * @page: page being migrated (not used)
- * @private: pointer to target node ID
- *
- * Returns newly allocated page on target node
- */
 
 /**
  * scan_promote_list - scan promote lru folios for migration
@@ -560,13 +593,24 @@ static void scan_promote_list(unsigned long nr_to_scan,
 		int migrated_count = 0;
 		
 		list_for_each_entry_safe(folio, next, &l_hold, lru) {
-			int rc = ktmm_migrate_folio_manual(folio, target_node, pgdat);
+			int rc;
+			
+			// Prevent soft lockups on large scans
+			cond_resched();
+			
+			// Remove folio from l_hold before passing to migration
+			// migrate_pages() will use folio->lru internally
+			list_del_init(&folio->lru);
+			
+			rc = ktmm_migrate_folio_manual(folio, target_node, pgdat);
 			if (rc == 0) {
 				migrated_count++;
-				// Remove from list since migration succeeded
-				list_del(&folio->lru);
+				// Migration succeeded - folio is now on target node's LRU
+				// Don't add back to l_hold
+			} else {
+				// Migration failed - add back to l_hold for putback
+				list_add(&folio->lru, &l_hold);
 			}
-			// If migration fails, leave it in list to be put back
 		}
 		
 		nr_migrated = migrated_count;
@@ -794,13 +838,24 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 		int migrated_count = 0;
 		
 		list_for_each_entry_safe(folio, next, &folio_list, lru) {
-			int rc = ktmm_migrate_folio_manual(folio, target_node, pgdat);
+			int rc;
+			
+			// Prevent soft lockups on large scans
+			cond_resched();
+			
+			// Remove folio from folio_list before passing to migration
+			// migrate_pages() will use folio->lru internally
+			list_del_init(&folio->lru);
+			
+			rc = ktmm_migrate_folio_manual(folio, target_node, pgdat);
 			if (rc == 0) {
 				migrated_count++;
-				// Remove from list since migration succeeded
-				list_del(&folio->lru);
+				// Migration succeeded - folio is now on target node's LRU
+				// Don't add back to folio_list
+			} else {
+				// Migration failed - add back to folio_list for putback
+				list_add(&folio->lru, &folio_list);
 			}
-			// If migration fails, leave it in list to be put back
 		}
 		
 		nr_migrated = migrated_count;
