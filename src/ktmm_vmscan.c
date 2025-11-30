@@ -111,6 +111,24 @@ static struct page *(*pt_alloc_pages)(gfp_t gfp_mask, unsigned int order, int pr
 					nodemask_t *nodemask);
 
 
+/************** MIGRATION HOOKED FUNCTION PROTOTYPES *****************************/
+/* try_to_migrate (rmap.c) - converts PTEs to migration entries */
+static void (*pt_try_to_migrate)(struct folio *folio, enum ttu_flags flags);
+
+/* remove_migration_ptes (migrate.c) - restores PTEs after migration */
+static void (*pt_remove_migration_ptes)(struct folio *src, struct folio *dst, bool locked);
+
+/* folio_migrate_mapping (migrate.c) - transfers mapping from old to new folio */
+static int (*pt_folio_migrate_mapping)(struct address_space *mapping,
+				struct folio *newfolio, struct folio *folio, int extra_count);
+
+/* folio_migrate_flags (migrate.c) - copies flags from old to new folio */
+static void (*pt_folio_migrate_flags)(struct folio *newfolio, struct folio *folio);
+
+/* copy_highpage (highmem.h) - copies page contents */
+static void (*pt_copy_highpage)(struct page *to, struct page *from);
+
+
 /**************** KTMM IMPLEMENTATION OF HOOKED FUNCTION **********************/
 static struct mem_cgroup *ktmm_mem_cgroup_iter(struct mem_cgroup *root,
 				struct mem_cgroup *prev,
@@ -432,30 +450,8 @@ static inline bool ktmm_folio_needs_release(struct folio *folio)
 }
 
 /**
- * ktmm_alloc_migration_target - allocate page on target node for migration
- * @page: page being migrated (used to determine order for huge pages)
- * @private: target node ID cast to unsigned long
- *
- * Returns newly allocated page on target node.
- * This is the callback function passed to migrate_pages().
- */
-static struct page *ktmm_alloc_migration_target(struct page *page, unsigned long private)
-{
-	int target_node = (int)private;
-	gfp_t gfp_mask = GFP_HIGHUSER_MOVABLE | __GFP_NOWARN;
-	unsigned int order = 0;
-	
-	/* Handle compound pages (huge pages) */
-	if (PageCompound(page)) {
-		order = compound_order(page);
-	}
-	
-	return alloc_pages_node(target_node, gfp_mask, order);
-}
-
-/**
  * ktmm_migrate_folio_manual - manually migrate a single folio to target node
- * Using migrate_pages() API which properly handles both anonymous and file-backed pages
+ * Properly handles both anonymous and file-backed pages using kernel internals
  * 
  * @folio: folio to migrate
  * @target_node: destination NUMA node
@@ -465,38 +461,145 @@ static struct page *ktmm_alloc_migration_target(struct page *page, unsigned long
  */
 static int ktmm_migrate_folio_manual(struct folio *folio, int target_node, struct pglist_data *pgdat)
 {
-	LIST_HEAD(pagelist);
-	int rc;
-	unsigned int nr_succeeded = 0;
-	struct page *page = &folio->page;
+	struct folio *newfolio = NULL;
+	struct address_space *mapping;
+	int rc = -EAGAIN;
+	gfp_t gfp_mask;
 	
-	// Check if page is suitable for migration (basic checks from migration.c)
+	(void)pgdat; /* Suppress unused parameter warning */
+	
+	// Check if page is suitable for migration
 	if (folio_test_unevictable(folio)) {
 		return -EINVAL;
 	}
 	
-	// Get a reference to prevent premature freeing
-	get_page(page);
-	
-	// Add to migration list - migrate_pages expects page, not folio
-	list_add(&page->lru, &pagelist);
-	
-	// Use kernel's migrate_pages() - handles both anonymous and file-backed pages
-	rc = migrate_pages(&pagelist, ktmm_alloc_migration_target, NULL,
-			   (unsigned long)target_node, MIGRATE_SYNC,
-			   MR_NUMA_MISPLACED, &nr_succeeded);
-	
-	// Check results
-	if (list_empty(&pagelist)) {
-		// Page was migrated successfully (removed from list by migrate_pages)
-		return 0;
+	// Skip if folio is under writeback
+	if (folio_test_writeback(folio)) {
+		return -EBUSY;
 	}
 	
-	// Migration failed - page is still in pagelist, remove it
-	list_del(&page->lru);
-	put_page(page);
+	// Try to lock the folio
+	if (!folio_trylock(folio)) {
+		return -EAGAIN;
+	}
 	
-	return (rc < 0) ? rc : -EAGAIN;
+	// Allocate new folio on target node
+	gfp_mask = GFP_HIGHUSER_MOVABLE | __GFP_NOWARN;
+	newfolio = (struct folio *)alloc_pages_node(target_node, gfp_mask, 0);
+	if (!newfolio) {
+		folio_unlock(folio);
+		return -ENOMEM;
+	}
+	
+	// Lock the new folio
+	folio_lock(newfolio);
+	
+	// Get the mapping
+	mapping = folio_mapping(folio);
+	
+	if (mapping) {
+		// File-backed page: use migrate_folio callback if available
+		if (mapping->a_ops && mapping->a_ops->migrate_folio) {
+			rc = mapping->a_ops->migrate_folio(mapping, newfolio, folio, MIGRATE_SYNC);
+			
+			if (rc == MIGRATEPAGE_SUCCESS) {
+				folio_unlock(newfolio);
+				folio_unlock(folio);
+				return 0;
+			}
+		}
+		// File-backed but no migrate_folio - fail
+		folio_unlock(newfolio);
+		folio_unlock(folio);
+		__free_pages(&newfolio->page, 0);
+		return -ENOSYS;
+	}
+	
+	// Anonymous page migration
+	// Step 1: Check if we can migrate (refcount check)
+	// Expected: 1 (LRU isolation) + 1 (our lock) = 2 for simple anon page
+	if (folio_ref_count(folio) > 3) {
+		// Too many references, someone else is using it
+		folio_unlock(newfolio);
+		folio_unlock(folio);
+		__free_pages(&newfolio->page, 0);
+		return -EAGAIN;
+	}
+	
+	// Step 2: Convert page table entries to migration entries
+	// This prevents any process from accessing the page during migration
+	if (pt_try_to_migrate) {
+		pt_try_to_migrate(folio, 0);
+	} else {
+		// Can't migrate without try_to_migrate
+		folio_unlock(newfolio);
+		folio_unlock(folio);
+		__free_pages(&newfolio->page, 0);
+		return -ENOSYS;
+	}
+	
+	// Check if page is still mapped after try_to_migrate
+	if (folio_mapped(folio)) {
+		// Still mapped, restore and fail
+		if (pt_remove_migration_ptes) {
+			pt_remove_migration_ptes(folio, folio, false);
+		}
+		folio_unlock(newfolio);
+		folio_unlock(folio);
+		__free_pages(&newfolio->page, 0);
+		return -EAGAIN;
+	}
+	
+	// Step 3: Migrate the mapping (for anonymous, this sets up the new folio)
+	if (pt_folio_migrate_mapping) {
+		rc = pt_folio_migrate_mapping(NULL, newfolio, folio, 0);
+		if (rc != MIGRATEPAGE_SUCCESS) {
+			// Restore PTEs and fail
+			if (pt_remove_migration_ptes) {
+				pt_remove_migration_ptes(folio, folio, false);
+			}
+			folio_unlock(newfolio);
+			folio_unlock(folio);
+			__free_pages(&newfolio->page, 0);
+			return rc;
+		}
+	} else {
+		// Manual mapping transfer for anonymous pages
+		newfolio->index = folio->index;
+		newfolio->mapping = folio->mapping;
+	}
+	
+	// Step 4: Copy page contents
+	if (pt_copy_highpage) {
+		pt_copy_highpage(&newfolio->page, &folio->page);
+	} else {
+		copy_highpage(&newfolio->page, &folio->page);
+	}
+	
+	// Step 5: Copy flags
+	if (pt_folio_migrate_flags) {
+		pt_folio_migrate_flags(newfolio, folio);
+	} else {
+		// Manual flag copy
+		if (folio_test_dirty(folio))
+			folio_set_dirty(newfolio);
+		if (folio_test_referenced(folio))
+			folio_set_referenced(newfolio);
+	}
+	
+	// Step 6: Replace migration PTEs with real PTEs pointing to new folio
+	if (pt_remove_migration_ptes) {
+		pt_remove_migration_ptes(folio, newfolio, false);
+	}
+	
+	// Step 7: Unlock both folios
+	folio_unlock(newfolio);
+	folio_unlock(folio);
+	
+	// The old folio will be freed by the caller (ktmm_free_unref_page_list)
+	// The new folio is now in use
+	
+	return MIGRATEPAGE_SUCCESS;
 }
 
 /**
@@ -1074,6 +1177,12 @@ static struct ktmm_hook vmscan_hooks[] = {
 	HOOK("folio_putback_lru", ktmm_folio_putback_lru, &pt_folio_putback_lru),
 	HOOK("folio_referenced", ktmm_folio_referenced, &pt_folio_referenced),
 	HOOK("__alloc_pages", ktmm_alloc_pages, &pt_alloc_pages),
+	/* Migration hooks for anonymous page support */
+	HOOK("try_to_migrate", NULL, &pt_try_to_migrate),
+	HOOK("remove_migration_ptes", NULL, &pt_remove_migration_ptes),
+	HOOK("folio_migrate_mapping", NULL, &pt_folio_migrate_mapping),
+	HOOK("folio_migrate_flags", NULL, &pt_folio_migrate_flags),
+	HOOK("copy_highpage", NULL, &pt_copy_highpage),
 };
 
 
