@@ -111,24 +111,6 @@ static struct page *(*pt_alloc_pages)(gfp_t gfp_mask, unsigned int order, int pr
 					nodemask_t *nodemask);
 
 
-/************** MIGRATION HOOKED FUNCTION PROTOTYPES *****************************/
-/* try_to_migrate (rmap.c) - converts PTEs to migration entries */
-static void (*pt_try_to_migrate)(struct folio *folio, enum ttu_flags flags);
-
-/* remove_migration_ptes (migrate.c) - restores PTEs after migration */
-static void (*pt_remove_migration_ptes)(struct folio *src, struct folio *dst, bool locked);
-
-/* folio_migrate_mapping (migrate.c) - transfers mapping from old to new folio */
-static int (*pt_folio_migrate_mapping)(struct address_space *mapping,
-				struct folio *newfolio, struct folio *folio, int extra_count);
-
-/* folio_migrate_flags (migrate.c) - copies flags from old to new folio */
-static void (*pt_folio_migrate_flags)(struct folio *newfolio, struct folio *folio);
-
-/* copy_highpage (highmem.h) - copies page contents */
-static void (*pt_copy_highpage)(struct page *to, struct page *from);
-
-
 /**************** KTMM IMPLEMENTATION OF HOOKED FUNCTION **********************/
 static struct mem_cgroup *ktmm_mem_cgroup_iter(struct mem_cgroup *root,
 				struct mem_cgroup *prev,
@@ -254,13 +236,13 @@ static int ktmm_folio_referenced(struct folio *folio, int is_locked,
 static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, const char *location)
 {
     int was_accessed;
+    const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
     
     /* Check the referenced flag */
     was_accessed = folio_test_referenced(folio);
     
     if (was_accessed) {
         /* Print the access information */
-        // const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
         // printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, jiffies=%lu) ***\n", 
         //          location, folio, node_type, jiffies);
         
@@ -268,13 +250,9 @@ static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, co
         folio_clear_referenced(folio);
     } 
     //else {
-    //     const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
     //     printk(KERN_INFO "Not accessed at %s: referenced_bit=0 (folio=%p, node=%s, jiffies=%lu)\n", 
     //              location, folio, node_type, jiffies);
     // }
-    
-    (void)pgdat;    /* Suppress unused parameter warning */
-    (void)location; /* Suppress unused parameter warning */
     
     return was_accessed;
 }
@@ -451,7 +429,7 @@ static inline bool ktmm_folio_needs_release(struct folio *folio)
 
 /**
  * ktmm_migrate_folio_manual - manually migrate a single folio to target node
- * Properly handles both anonymous and file-backed pages using kernel internals
+ * Following the exact pattern from migration.c for kernel 5.3
  * 
  * @folio: folio to migrate
  * @target_node: destination NUMA node
@@ -461,145 +439,46 @@ static inline bool ktmm_folio_needs_release(struct folio *folio)
  */
 static int ktmm_migrate_folio_manual(struct folio *folio, int target_node, struct pglist_data *pgdat)
 {
-	struct folio *newfolio = NULL;
+	struct page *page = &folio->page;
+	struct page *newpage = NULL;
 	struct address_space *mapping;
-	int rc = -EAGAIN;
-	gfp_t gfp_mask;
+	int rc = -EINVAL;
 	
-	(void)pgdat; /* Suppress unused parameter warning */
+	// Get the mapping (similar to migration.c line 93)
+	mapping = folio_mapping(folio);
+	if (!mapping) {
+		// No mapping, can't migrate
+		return -EINVAL;
+	}
 	
-	// Check if page is suitable for migration
+	// Check if page is suitable for migration (basic checks from migration.c)
 	if (folio_test_unevictable(folio)) {
 		return -EINVAL;
 	}
 	
-	// Skip if folio is under writeback
-	if (folio_test_writeback(folio)) {
-		return -EBUSY;
-	}
-	
-	// Try to lock the folio
-	if (!folio_trylock(folio)) {
-		return -EAGAIN;
-	}
-	
-	// Allocate new folio on target node
-	gfp_mask = GFP_HIGHUSER_MOVABLE | __GFP_NOWARN;
-	newfolio = (struct folio *)alloc_pages_node(target_node, gfp_mask, 0);
-	if (!newfolio) {
-		folio_unlock(folio);
+	// Allocate new page on target node (migration.c line 146)
+	newpage = alloc_pages_node(target_node, GFP_HIGHUSER_MOVABLE, 0);
+	if (!newpage) {
 		return -ENOMEM;
 	}
 	
-	// Lock the new folio
-	folio_lock(newfolio);
-	
-	// Get the mapping
-	mapping = folio_mapping(folio);
-	
-	if (mapping) {
-		// File-backed page: use migrate_folio callback if available
-		if (mapping->a_ops && mapping->a_ops->migrate_folio) {
-			rc = mapping->a_ops->migrate_folio(mapping, newfolio, folio, MIGRATE_SYNC);
-			
-			if (rc == MIGRATEPAGE_SUCCESS) {
-				folio_unlock(newfolio);
-				folio_unlock(folio);
-				return 0;
-			}
-		}
-		// File-backed but no migrate_folio - fail
-		folio_unlock(newfolio);
-		folio_unlock(folio);
-		__free_pages(&newfolio->page, 0);
-		return -ENOSYS;
-	}
-	
-	// Anonymous page migration
-	// Step 1: Check if we can migrate (refcount check)
-	// Expected: 1 (LRU isolation) + 1 (our lock) = 2 for simple anon page
-	if (folio_ref_count(folio) > 3) {
-		// Too many references, someone else is using it
-		folio_unlock(newfolio);
-		folio_unlock(folio);
-		__free_pages(&newfolio->page, 0);
-		return -EAGAIN;
-	}
-	
-	// Step 2: Convert page table entries to migration entries
-	// This prevents any process from accessing the page during migration
-	if (pt_try_to_migrate) {
-		pt_try_to_migrate(folio, 0);
-	} else {
-		// Can't migrate without try_to_migrate
-		folio_unlock(newfolio);
-		folio_unlock(folio);
-		__free_pages(&newfolio->page, 0);
-		return -ENOSYS;
-	}
-	
-	// Check if page is still mapped after try_to_migrate
-	if (folio_mapped(folio)) {
-		// Still mapped, restore and fail
-		if (pt_remove_migration_ptes) {
-			pt_remove_migration_ptes(folio, folio, false);
-		}
-		folio_unlock(newfolio);
-		folio_unlock(folio);
-		__free_pages(&newfolio->page, 0);
-		return -EAGAIN;
-	}
-	
-	// Step 3: Migrate the mapping (for anonymous, this sets up the new folio)
-	if (pt_folio_migrate_mapping) {
-		rc = pt_folio_migrate_mapping(NULL, newfolio, folio, 0);
-		if (rc != MIGRATEPAGE_SUCCESS) {
-			// Restore PTEs and fail
-			if (pt_remove_migration_ptes) {
-				pt_remove_migration_ptes(folio, folio, false);
-			}
-			folio_unlock(newfolio);
-			folio_unlock(folio);
-			__free_pages(&newfolio->page, 0);
+	// Try migration via mapping->a_ops->migratepage if available (migration.c line 153)
+	if (mapping->a_ops && mapping->a_ops->migrate_folio) {
+		rc = mapping->a_ops->migrate_folio(mapping, page_folio(newpage), folio, MIGRATE_SYNC);
+		
+		if (rc == MIGRATEPAGE_SUCCESS) {
+			// Success! Don't free newpage, ownership transferred
+			return 0;
+		} else {
+			// Failed, free newpage and return error
+			__free_pages(newpage, 0);
 			return rc;
 		}
-	} else {
-		// Manual mapping transfer for anonymous pages
-		newfolio->index = folio->index;
-		newfolio->mapping = folio->mapping;
 	}
 	
-	// Step 4: Copy page contents
-	if (pt_copy_highpage) {
-		pt_copy_highpage(&newfolio->page, &folio->page);
-	} else {
-		copy_highpage(&newfolio->page, &folio->page);
-	}
-	
-	// Step 5: Copy flags
-	if (pt_folio_migrate_flags) {
-		pt_folio_migrate_flags(newfolio, folio);
-	} else {
-		// Manual flag copy
-		if (folio_test_dirty(folio))
-			folio_set_dirty(newfolio);
-		if (folio_test_referenced(folio))
-			folio_set_referenced(newfolio);
-	}
-	
-	// Step 6: Replace migration PTEs with real PTEs pointing to new folio
-	if (pt_remove_migration_ptes) {
-		pt_remove_migration_ptes(folio, newfolio, false);
-	}
-	
-	// Step 7: Unlock both folios
-	folio_unlock(newfolio);
-	folio_unlock(folio);
-	
-	// The old folio will be freed by the caller (ktmm_free_unref_page_list)
-	// The new folio is now in use
-	
-	return MIGRATEPAGE_SUCCESS;
+	// If no migrate_folio operation, free newpage and fail
+	__free_pages(newpage, 0);
+	return -ENOSYS;
 }
 
 /**
@@ -740,7 +619,7 @@ static void scan_active_list(unsigned long nr_to_scan,
 	unsigned nr_deactivate, nr_activate, nr_promote;
 	unsigned nr_rotated = 0;
 	int file = is_file_lru(lru);
-	(void)nr_rotated; /* Suppress unused variable warning */
+	int nid = pgdat->node_id;
 	
 	//pr_info("scanning active list");
 
@@ -875,6 +754,7 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	unsigned long nr_scanned;
 	unsigned long nr_taken = 0;
 	unsigned long nr_migrated = 0;
+	unsigned long nr_reclaimed = 0;
 	bool file = is_file_lru(lru);
 	int nid = pgdat->node_id;
 	//pr_info("scanning inactive list");
@@ -1177,12 +1057,6 @@ static struct ktmm_hook vmscan_hooks[] = {
 	HOOK("folio_putback_lru", ktmm_folio_putback_lru, &pt_folio_putback_lru),
 	HOOK("folio_referenced", ktmm_folio_referenced, &pt_folio_referenced),
 	HOOK("__alloc_pages", ktmm_alloc_pages, &pt_alloc_pages),
-	/* Migration hooks for anonymous page support */
-	HOOK("try_to_migrate", NULL, &pt_try_to_migrate),
-	HOOK("remove_migration_ptes", NULL, &pt_remove_migration_ptes),
-	HOOK("folio_migrate_mapping", NULL, &pt_folio_migrate_mapping),
-	HOOK("folio_migrate_flags", NULL, &pt_folio_migrate_flags),
-	HOOK("copy_highpage", NULL, &pt_copy_highpage),
 };
 
 
