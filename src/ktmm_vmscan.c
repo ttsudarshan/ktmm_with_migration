@@ -236,13 +236,13 @@ static int ktmm_folio_referenced(struct folio *folio, int is_locked,
 static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, const char *location)
 {
     int was_accessed;
-    const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
     
     /* Check the referenced flag */
     was_accessed = folio_test_referenced(folio);
     
     if (was_accessed) {
         /* Print the access information */
+        // const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
         // printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, jiffies=%lu) ***\n", 
         //          location, folio, node_type, jiffies);
         
@@ -250,9 +250,13 @@ static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, co
         folio_clear_referenced(folio);
     } 
     //else {
+    //     const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
     //     printk(KERN_INFO "Not accessed at %s: referenced_bit=0 (folio=%p, node=%s, jiffies=%lu)\n", 
     //              location, folio, node_type, jiffies);
     // }
+    
+    (void)pgdat;    /* Suppress unused parameter warning */
+    (void)location; /* Suppress unused parameter warning */
     
     return was_accessed;
 }
@@ -428,8 +432,30 @@ static inline bool ktmm_folio_needs_release(struct folio *folio)
 }
 
 /**
+ * ktmm_alloc_migration_target - allocate page on target node for migration
+ * @page: page being migrated (used to determine order for huge pages)
+ * @private: target node ID cast to unsigned long
+ *
+ * Returns newly allocated page on target node.
+ * This is the callback function passed to migrate_pages().
+ */
+static struct page *ktmm_alloc_migration_target(struct page *page, unsigned long private)
+{
+	int target_node = (int)private;
+	gfp_t gfp_mask = GFP_HIGHUSER_MOVABLE | __GFP_NOWARN;
+	unsigned int order = 0;
+	
+	/* Handle compound pages (huge pages) */
+	if (PageCompound(page)) {
+		order = compound_order(page);
+	}
+	
+	return alloc_pages_node(target_node, gfp_mask, order);
+}
+
+/**
  * ktmm_migrate_folio_manual - manually migrate a single folio to target node
- * Following the exact pattern from migration.c for kernel 5.3
+ * Using migrate_pages() API which properly handles both anonymous and file-backed pages
  * 
  * @folio: folio to migrate
  * @target_node: destination NUMA node
@@ -439,46 +465,38 @@ static inline bool ktmm_folio_needs_release(struct folio *folio)
  */
 static int ktmm_migrate_folio_manual(struct folio *folio, int target_node, struct pglist_data *pgdat)
 {
+	LIST_HEAD(pagelist);
+	int rc;
+	unsigned int nr_succeeded = 0;
 	struct page *page = &folio->page;
-	struct page *newpage = NULL;
-	struct address_space *mapping;
-	int rc = -EINVAL;
-	
-	// Get the mapping (similar to migration.c line 93)
-	mapping = folio_mapping(folio);
-	if (!mapping) {
-		// No mapping, can't migrate
-		return -EINVAL;
-	}
 	
 	// Check if page is suitable for migration (basic checks from migration.c)
 	if (folio_test_unevictable(folio)) {
 		return -EINVAL;
 	}
 	
-	// Allocate new page on target node (migration.c line 146)
-	newpage = alloc_pages_node(target_node, GFP_HIGHUSER_MOVABLE, 0);
-	if (!newpage) {
-		return -ENOMEM;
+	// Get a reference to prevent premature freeing
+	get_page(page);
+	
+	// Add to migration list - migrate_pages expects page, not folio
+	list_add(&page->lru, &pagelist);
+	
+	// Use kernel's migrate_pages() - handles both anonymous and file-backed pages
+	rc = migrate_pages(&pagelist, ktmm_alloc_migration_target, NULL,
+			   (unsigned long)target_node, MIGRATE_SYNC,
+			   MR_NUMA_MISPLACED, &nr_succeeded);
+	
+	// Check results
+	if (list_empty(&pagelist)) {
+		// Page was migrated successfully (removed from list by migrate_pages)
+		return 0;
 	}
 	
-	// Try migration via mapping->a_ops->migratepage if available (migration.c line 153)
-	if (mapping->a_ops && mapping->a_ops->migrate_folio) {
-		rc = mapping->a_ops->migrate_folio(mapping, page_folio(newpage), folio, MIGRATE_SYNC);
-		
-		if (rc == MIGRATEPAGE_SUCCESS) {
-			// Success! Don't free newpage, ownership transferred
-			return 0;
-		} else {
-			// Failed, free newpage and return error
-			__free_pages(newpage, 0);
-			return rc;
-		}
-	}
+	// Migration failed - page is still in pagelist, remove it
+	list_del(&page->lru);
+	put_page(page);
 	
-	// If no migrate_folio operation, free newpage and fail
-	__free_pages(newpage, 0);
-	return -ENOSYS;
+	return (rc < 0) ? rc : -EAGAIN;
 }
 
 /**
@@ -619,7 +637,7 @@ static void scan_active_list(unsigned long nr_to_scan,
 	unsigned nr_deactivate, nr_activate, nr_promote;
 	unsigned nr_rotated = 0;
 	int file = is_file_lru(lru);
-	int nid = pgdat->node_id;
+	(void)nr_rotated; /* Suppress unused variable warning */
 	
 	//pr_info("scanning active list");
 
@@ -754,7 +772,6 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	unsigned long nr_scanned;
 	unsigned long nr_taken = 0;
 	unsigned long nr_migrated = 0;
-	unsigned long nr_reclaimed = 0;
 	bool file = is_file_lru(lru);
 	int nid = pgdat->node_id;
 	//pr_info("scanning inactive list");
