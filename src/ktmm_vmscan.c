@@ -421,7 +421,6 @@ static inline bool ktmm_folio_evictable(struct folio *folio)
 static inline bool ktmm_folio_needs_release(struct folio *folio)
 {
   //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
 	struct address_space *mapping = folio_mapping(folio);
 
 	return folio_has_private(folio) || (mapping && mapping_release_always(mapping));
@@ -572,7 +571,7 @@ static void scan_promote_list(unsigned long nr_to_scan,
 		nr_migrated = migrated_count;
 		if (nr_migrated > 0) {
 			__mod_node_page_state(pgdat, NR_PROMOTED, nr_migrated);
-			pr_info("pgdat %d PROMOTED %lu folios from PMEM to DRAM", nid, nr_migrated);
+			// printk("pgdat %d PROMOTED %lu folios from PMEM to DRAM", nid, nr_migrated);
 		}
 	}
 	spin_lock_irq(&lruvec->lru_lock);
@@ -806,7 +805,7 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 		nr_migrated = migrated_count;
 		if (nr_migrated > 0) {
 			__mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
-			pr_info("pgdat %d DEMOTED %lu folios from DRAM to PMEM", nid, nr_migrated);
+			// printk("pgdat %d DEMOTED %lu folios from DRAM to PMEM", nid, nr_migrated);
 		}
 	}
   
