@@ -436,108 +436,49 @@ static inline bool ktmm_folio_needs_release(struct folio *folio)
  * @pgdat: page data structure
  *
  * Returns: 0 on success, negative error code on failure
- *
- * FIXED VERSION: Properly handles anonymous pages, locking, and reference counting
  */
 static int ktmm_migrate_folio_manual(struct folio *folio, int target_node, struct pglist_data *pgdat)
 {
-	struct folio *newfolio = NULL;
+	struct page *page = &folio->page;
+	struct page *newpage = NULL;
 	struct address_space *mapping;
-	int rc = -EAGAIN;
-	gfp_t gfp_mask;
+	int rc = -EINVAL;
+	
+	// Get the mapping (similar to migration.c line 93)
+	mapping = folio_mapping(folio);
+	if (!mapping) {
+		// No mapping, can't migrate
+		return -EINVAL;
+	}
 	
 	// Check if page is suitable for migration (basic checks from migration.c)
 	if (folio_test_unevictable(folio)) {
 		return -EINVAL;
 	}
 	
-	// Try to lock the folio - required for safe migration
-	if (!folio_trylock(folio)) {
-		return -EAGAIN;
-	}
-	
-	// Check for writeback - can't migrate during writeback
-	if (folio_test_writeback(folio)) {
-		rc = -EBUSY;
-		goto out_unlock;
-	}
-	
-	// Get a reference to prevent premature freeing during migration
-	folio_get(folio);
-	
-	// Set appropriate GFP flags for allocation
-	gfp_mask = GFP_HIGHUSER_MOVABLE | __GFP_NOWARN;
-	
 	// Allocate new page on target node (migration.c line 146)
-	newfolio = (struct folio *)alloc_pages_node(target_node, gfp_mask, folio_order(folio));
-	if (!newfolio) {
-		rc = -ENOMEM;
-		goto out_put;
+	newpage = alloc_pages_node(target_node, GFP_HIGHUSER_MOVABLE, 0);
+	if (!newpage) {
+		return -ENOMEM;
 	}
 	
-	// Get the mapping (similar to migration.c line 93)
-	// NOTE: Anonymous pages have NULL mapping but are still migratable
-	mapping = folio_mapping(folio);
-	
-	if (mapping) {
-		// File-backed page: Try migration via mapping->a_ops->migrate_folio if available
-		if (mapping->a_ops && mapping->a_ops->migrate_folio) {
-			rc = mapping->a_ops->migrate_folio(mapping, newfolio, folio, MIGRATE_SYNC);
-			
-			if (rc == MIGRATEPAGE_SUCCESS) {
-				// Success! Ownership of newfolio transferred to mapping
-				// The old folio will be freed by the migration infrastructure
-				folio_unlock(folio);
-				folio_put(folio);  // Drop our reference, old folio handled by migration
-				return 0;
-			}
+	// Try migration via mapping->a_ops->migratepage if available (migration.c line 153)
+	if (mapping->a_ops && mapping->a_ops->migrate_folio) {
+		rc = mapping->a_ops->migrate_folio(mapping, page_folio(newpage), folio, MIGRATE_SYNC);
+		
+		if (rc == MIGRATEPAGE_SUCCESS) {
+			// Success! Don't free newpage, ownership transferred
+			return 0;
 		} else {
-			// No migrate_folio operation available for this mapping
-			rc = -ENOSYS;
+			// Failed, free newpage and return error
+			__free_pages(newpage, 0);
+			return rc;
 		}
-	} else {
-		// Anonymous page migration using migrate_folio_move pattern
-		// For anonymous pages, we need to handle the rmap and swap cache
-		
-		// Check if folio has any references from page tables
-		if (folio_ref_count(folio) > 2) {
-			// Too many references (1 from LRU isolation + 1 from our folio_get)
-			// Other references mean someone else is using it
-			rc = -EAGAIN;
-			goto out_free_new;
-		}
-		
-		// Copy the page content
-		copy_highpage(&newfolio->page, &folio->page);
-		
-		// Copy folio flags that should be preserved
-		if (folio_test_dirty(folio))
-			folio_set_dirty(newfolio);
-		if (folio_test_young(folio))
-			folio_set_young(newfolio);
-		if (folio_test_referenced(folio))
-			folio_set_referenced(newfolio);
-		
-		// For anonymous folios, we need to replace in the rmap
-		// This is a simplified version - full implementation would need
-		// try_to_migrate() and remove_migration_ptes() from migrate.c
-		
-		// Since we can't easily do full anonymous migration without
-		// kernel internal functions, return failure for anonymous pages
-		// that have active page table mappings
-		rc = -ENOSYS;
 	}
 	
-out_free_new:
-	// Failed, free newfolio
-	folio_put(newfolio);
-	
-out_put:
-	folio_put(folio);  // Drop our reference
-	
-out_unlock:
-	folio_unlock(folio);
-	return rc;
+	// If no migrate_folio operation, free newpage and fail
+	__free_pages(newpage, 0);
+	return -ENOSYS;
 }
 
 /**
@@ -619,24 +560,13 @@ static void scan_promote_list(unsigned long nr_to_scan,
 		int migrated_count = 0;
 		
 		list_for_each_entry_safe(folio, next, &l_hold, lru) {
-			int rc;
-			
-			// Prevent soft lockups on large scans
-			cond_resched();
-			
-			rc = ktmm_migrate_folio_manual(folio, target_node, pgdat);
+			int rc = ktmm_migrate_folio_manual(folio, target_node, pgdat);
 			if (rc == 0) {
 				migrated_count++;
 				// Remove from list since migration succeeded
-				// Note: After successful migration, the old folio's resources
-				// have been transferred to the new folio. The old folio structure
-				// should no longer be accessed. We remove it from our list so
-				// we don't try to put it back on LRU or free it again.
 				list_del(&folio->lru);
-				// The successfully migrated folio is now on the new node's LRU
-				// (handled by the migration infrastructure)
 			}
-			// If migration fails (rc != 0), leave it in list to be put back to LRU
+			// If migration fails, leave it in list to be put back
 		}
 		
 		nr_migrated = migrated_count;
@@ -864,24 +794,13 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 		int migrated_count = 0;
 		
 		list_for_each_entry_safe(folio, next, &folio_list, lru) {
-			int rc;
-			
-			// Prevent soft lockups on large scans
-			cond_resched();
-			
-			rc = ktmm_migrate_folio_manual(folio, target_node, pgdat);
+			int rc = ktmm_migrate_folio_manual(folio, target_node, pgdat);
 			if (rc == 0) {
 				migrated_count++;
 				// Remove from list since migration succeeded
-				// Note: After successful migration, the old folio's resources
-				// have been transferred to the new folio. The old folio structure
-				// should no longer be accessed. We remove it from our list so
-				// we don't try to put it back on LRU or free it again.
 				list_del(&folio->lru);
-				// The successfully migrated folio is now on the new node's LRU
-				// (handled by the migration infrastructure)
 			}
-			// If migration fails (rc != 0), leave it in list to be put back to LRU
+			// If migration fails, leave it in list to be put back
 		}
 		
 		nr_migrated = migrated_count;
