@@ -42,6 +42,7 @@
 #include <linux/vmstat.h>
 #include <linux/wait.h>
 #include <linux/jiffies.h>
+#include <linux/timer.h>
 #include "ktmm_hook.h"
 #include "ktmm_vmscan.h"
 
@@ -57,6 +58,37 @@ static struct task_struct *tmemd_list[MAX_NUMNODES];
 
 /* per node tmemd wait queues */
 wait_queue_head_t tmemd_wait[MAX_NUMNODES];
+
+
+/*****************************************************************************
+ * Promotion/Demotion Page Counters
+ *****************************************************************************/
+
+/* Atomic counters for tracking total promoted and demoted pages */
+static atomic64_t total_pages_promoted = ATOMIC64_INIT(0);
+static atomic64_t total_pages_demoted = ATOMIC64_INIT(0);
+
+/* Timer for periodic printing of counters */
+static struct timer_list page_stats_timer;
+
+/**
+ * page_stats_timer_callback - timer callback that prints promotion/demotion stats
+ * @t: timer_list pointer
+ *
+ * This function is called every 5 seconds to print the total number of
+ * pages promoted and demoted.
+ */
+static void page_stats_timer_callback(struct timer_list *t)
+{
+	u64 promoted = atomic64_read(&total_pages_promoted);
+	u64 demoted = atomic64_read(&total_pages_demoted);
+
+	printk(KERN_INFO "*** KTMM PAGE STATS: Total Promoted: %llu, Total Demoted: %llu ***\n",
+	       promoted, demoted);
+
+	/* Re-arm the timer for another 5 seconds */
+	mod_timer(&page_stats_timer, jiffies + 5 * HZ);
+}
 
 
 /************** MISC HOOKED FUNCTION PROTOTYPES *****************************/
@@ -571,6 +603,8 @@ static void scan_promote_list(unsigned long nr_to_scan,
 		nr_migrated = migrated_count;
 		if (nr_migrated > 0) {
 			__mod_node_page_state(pgdat, NR_PROMOTED, nr_migrated);
+			/* Update the total promoted counter */
+			atomic64_add(nr_migrated, &total_pages_promoted);
 			// printk("pgdat %d PROMOTED %lu folios from PMEM to DRAM", nid, nr_migrated);
 		}
 	}
@@ -805,6 +839,8 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 		nr_migrated = migrated_count;
 		if (nr_migrated > 0) {
 			__mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
+			/* Update the total demoted counter */
+			atomic64_add(nr_migrated, &total_pages_demoted);
 			// printk("pgdat %d DEMOTED %lu folios from DRAM to PMEM", nid, nr_migrated);
 		}
 	}
@@ -1082,6 +1118,10 @@ int tmemd_start_available(void)
 		init_waitqueue_head(&tmemd_wait[i]);
 
 	ret = install_hooks(vmscan_hooks, ARRAY_SIZE(vmscan_hooks));
+
+	/* Initialize and start the page stats timer */
+	timer_setup(&page_stats_timer, page_stats_timer_callback, 0);
+	mod_timer(&page_stats_timer, jiffies + 5 * HZ);
 	
 	for_each_online_node(nid)
 	{
@@ -1108,6 +1148,14 @@ int tmemd_start_available(void)
 void tmemd_stop_all(void)
 {
 	int nid;
+
+	/* Stop and delete the page stats timer */
+	del_timer_sync(&page_stats_timer);
+
+	/* Print final stats before stopping */
+	printk(KERN_INFO "*** KTMM FINAL STATS: Total Promoted: %llu, Total Demoted: %llu ***\n",
+	       (u64)atomic64_read(&total_pages_promoted),
+	       (u64)atomic64_read(&total_pages_demoted));
 
 	for_each_online_node(nid)
 	{
