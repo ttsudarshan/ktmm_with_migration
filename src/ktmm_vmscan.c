@@ -901,76 +901,99 @@ static unsigned long scan_list(enum lru_list lru,
  *
  * This is responsible for scanning the lruvec per memory cgroup.
  */
+/**
+ * scan_node - scan a node's LRU lists
+ * 
+ * @pgdat:	node data struct
+ * @nid:	node ID number
+ * @reclaim:	memory reclaim cookie
+ *
+ * This is responsible for scanning the lruvec per memory cgroup.
+ */
 static void scan_node(pg_data_t *pgdat, 
-		struct scan_control *sc,
-		struct mem_cgroup_reclaim_cookie *reclaim)
+  struct scan_control *sc,
+  struct mem_cgroup_reclaim_cookie *reclaim)
 {
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
+//printk(KERN_INFO "sudarshan: entered %s\n", __func__);
 
-	enum lru_list lru;
-	struct mem_cgroup *memcg;
-	int nid = pgdat->node_id;
-	int memcg_count;
-	
-	/* Timing and page count tracking */
-	u64 scan_start_time, scan_end_time;
-	u64 total_scan_time_us;
-	unsigned long total_pages_scanned = 0;
+enum lru_list lru;
+struct mem_cgroup *memcg;
+int nid = pgdat->node_id;
+int memcg_count;
 
-	scan_start_time = ktime_get_ns();
+/* Timing and page count tracking */
+u64 scan_start_time, scan_end_time;
+u64 total_scan_time_us;
+unsigned long total_pages_scanned = 0;
 
-	memset(&sc->nr, 0, sizeof(sc->nr));
-	memcg = ktmm_mem_cgroup_iter(NULL, NULL, reclaim);
-	sc->target_mem_cgroup = memcg;
+scan_start_time = ktime_get_ns();
 
-	//pr_info("scanning lists on node %d", nid);
-	memcg_count = 0;
-	do {
-		struct lruvec *lruvec = &memcg->nodeinfo[nid]->lruvec;
-		unsigned long reclaimed;
-		unsigned long scanned;
+memset(&sc->nr, 0, sizeof(sc->nr));
+memcg = ktmm_mem_cgroup_iter(NULL, NULL, reclaim);
+sc->target_mem_cgroup = memcg;
 
-		memcg_count += 1;
+//pr_info("scanning lists on node %d", nid);
+memcg_count = 0;
+do {
+  struct lruvec *lruvec = &memcg->nodeinfo[nid]->lruvec;
+  unsigned long reclaimed;
+  unsigned long scanned;
 
-		if (ktmm_cgroup_below_min(memcg)) {
-			/*
-			 * Hard protection.
-			 * If there is no reclaimable memory, OOM.
-			 */
-			continue;
-		} else if (ktmm_cgroup_below_low(memcg)) {
-			/*
-			 * Soft protection.
-			 * Respect the protection only as long as
-			 * there is an unprotected supply of 
-			 * reclaimable memory from other cgroups.
-			 */
-			if (!sc->memcg_low_reclaim) {
-				sc->memcg_low_skipped = 1;
-				continue;
-			}
-			// memcg_memory_event(memcg, MEMCG_LOW);
-		}
+  memcg_count += 1;
 
-		reclaimed = sc->nr_reclaimed;
-		scanned = sc->nr_scanned;
+  if (ktmm_cgroup_below_min(memcg)) {
+    /*
+     * Hard protection.
+     * If there is no reclaimable memory, OOM.
+     */
+    continue;
+  } else if (ktmm_cgroup_below_low(memcg)) {
+    /*
+     * Soft protection.
+     * Respect the protection only as long as
+     * there is an unprotected supply of 
+     * reclaimable memory from other cgroups.
+     */
+    if (!sc->memcg_low_reclaim) {
+      sc->memcg_low_skipped = 1;
+      continue;
+    }
+    // memcg_memory_event(memcg, MEMCG_LOW);
+  }
 
-		for_each_evictable_lru(lru) {
-			unsigned long nr_to_scan = 1024;  //3000000//sudarshan changed this to 256 for better page access detection
+  reclaimed = sc->nr_reclaimed;
+  scanned = sc->nr_scanned;
 
-			scan_list(lru, nr_to_scan, lruvec, sc, pgdat);
-			
-			/* Track total pages scanned across all LRU lists */
-			total_pages_scanned += nr_to_scan;
-		}
-	} while ((memcg = ktmm_mem_cgroup_iter(NULL, memcg, NULL)));
-	
-	/* Calculate and print scan statistics */
-	scan_end_time = ktime_get_ns();
-	total_scan_time_us = (scan_end_time - scan_start_time) / 1000;  /* Convert nanoseconds to microseconds */
-	
-	// printk(KERN_INFO "*** SCAN_STATS (Node %d): Total Pages Scanned: %lu, Total Scan Time: %llu us ***\n", 
-	//        nid, total_pages_scanned, total_scan_time_us);
+  for_each_evictable_lru(lru) {
+    unsigned long nr_to_scan = 1024;  //3000000//sudarshan changed this to 256 for better page access detection
+
+    scan_list(lru, nr_to_scan, lruvec, sc, pgdat);
+    
+    /* Track total pages scanned across all LRU lists */
+    total_pages_scanned += nr_to_scan;
+  }
+  
+  /* CRITICAL FIX: Explicitly scan the promote list on PMEM node */
+  if (pgdat->pm_node != 0) {
+    unsigned long nr_to_scan = 1024;
+    
+    /* Scan anon promote list */
+    scan_promote_list(nr_to_scan, lruvec, sc, LRU_PROMOTE, pgdat);
+    total_pages_scanned += nr_to_scan;
+    
+    /* Scan file promote list */
+    scan_promote_list(nr_to_scan, lruvec, sc, LRU_PROMOTE + LRU_FILE, pgdat);
+    total_pages_scanned += nr_to_scan;
+  }
+  
+} while ((memcg = ktmm_mem_cgroup_iter(NULL, memcg, NULL)));
+
+/* Calculate and print scan statistics */
+scan_end_time = ktime_get_ns();
+total_scan_time_us = (scan_end_time - scan_start_time) / 1000;  /* Convert nanoseconds to microseconds */
+
+// printk(KERN_INFO "*** SCAN_STATS (Node %d): Total Pages Scanned: %lu, Total Scan Time: %llu us ***\n", 
+//        nid, total_pages_scanned, total_scan_time_us);
 }
 
 
