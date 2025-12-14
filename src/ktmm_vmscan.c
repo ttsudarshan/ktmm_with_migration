@@ -670,12 +670,11 @@ spin_unlock_irq(&lruvec->lru_lock);
 
 while (!list_empty(&l_hold)) {
 struct folio *folio;
+int referenced_count;
 
 cond_resched();
 folio = lru_to_folio(&l_hold);
 list_del(&folio->lru);
-
-/* MOVED: Track page access pattern AFTER the promotion checks to avoid clearing the bit early */
 
 if (unlikely(!ktmm_folio_evictable(folio))) {
 ktmm_folio_putback_lru(folio);
@@ -693,13 +692,14 @@ if (ktmm_folio_needs_release(folio) &&
 // node migration
 if (pgdat->pm_node != 0) {
 //pr_debug("active pm_node");
-if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
+referenced_count = ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags);
+if (referenced_count) {
   // pr_debug("set promote");
   //SetPagePromote(page); NEEDS TO BE MODULE TRACKED
   folio_set_promote(folio);
   list_add(&folio->lru, &l_promote);
-  /* ADDED: Track page access pattern NOW, after promotion decision */
-  track_folio_access(folio, pgdat, "ACTIVE_LIST->PROMOTE");
+  /* ADDED: Page was referenced, promoting to DRAM */
+  // printk(KERN_INFO "*** PROMOTING: folio=%p from PMEM (ref_count=%d) ***\n", folio, referenced_count);
   continue;
 }
 }
@@ -728,8 +728,6 @@ if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup,
 if ((vm_flags & VM_EXEC) && folio_is_file_lru(folio)) {
   nr_rotated += folio_nr_pages(folio);
   list_add(&folio->lru, &l_active);
-  /* ADDED: Track page access pattern for rotated pages */
-  track_folio_access(folio, pgdat, "ACTIVE_LIST->ROTATED");
   continue;
 }
 }
@@ -737,8 +735,6 @@ if ((vm_flags & VM_EXEC) && folio_is_file_lru(folio)) {
 folio_clear_active(folio);	// we are de-activating
 folio_set_workingset(folio);
 list_add(&folio->lru, &l_inactive);
-/* ADDED: Track page access pattern for deactivated pages (will show as not accessed) */
-track_folio_access(folio, pgdat, "ACTIVE_LIST->INACTIVE");
 }
 
 // Move folios back to the lru list.
