@@ -869,103 +869,133 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
  * @sc:			scan control
  * @pgdat:		node data
  */
-static unsigned long scan_list(enum lru_list lru, 
-				unsigned long nr_to_scan,
-				struct lruvec *lruvec, 
-				struct scan_control *sc,
-				struct pglist_data *pgdat)
+static void scan_active_list(unsigned long nr_to_scan,
+  struct lruvec *lruvec,
+  struct scan_control *sc,
+  enum lru_list lru,
+  struct pglist_data *pgdat)
 {
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
+//printk(KERN_INFO "sudarshan: entered %s\n", __func__);
 
-	if (is_active_lru(lru))
-		scan_active_list(nr_to_scan, lruvec, sc, lru, pgdat);
+unsigned long nr_taken;
+unsigned long nr_scanned;
+unsigned long vm_flags;
+LIST_HEAD(l_hold);	// The folios which were snipped off
+LIST_HEAD(l_active);
+LIST_HEAD(l_inactive);
+LIST_HEAD(l_promote);
+unsigned nr_deactivate, nr_activate, nr_promote;
+unsigned nr_rotated = 0;
+int file = is_file_lru(lru);
+int nid = pgdat->node_id;
 
-	if(is_promote_lru(lru))
-		scan_promote_list(nr_to_scan, lruvec, sc, lru, pgdat);
+//pr_info("scanning active list");
 
-	return scan_inactive_list(nr_to_scan, lruvec, sc, lru, pgdat);
+// make sure pages in per-cpu lru list are added
+ktmm_lru_add_drain();
+
+spin_lock_irq(&lruvec->lru_lock);
+
+nr_taken = ktmm_isolate_lru_folios(nr_to_scan, lruvec, &l_hold,
+       &nr_scanned, sc, lru);
+
+__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
+
+spin_unlock_irq(&lruvec->lru_lock);
+
+while (!list_empty(&l_hold)) {
+struct folio *folio;
+
+cond_resched();
+folio = lru_to_folio(&l_hold);
+list_del(&folio->lru);
+
+/* MOVED: Track page access pattern AFTER the promotion checks to avoid clearing the bit early */
+
+if (unlikely(!ktmm_folio_evictable(folio))) {
+ktmm_folio_putback_lru(folio);
+continue;
 }
 
+if (unlikely(buffer_heads_over_limit)) {
+if (ktmm_folio_needs_release(folio) &&
+    folio_trylock(folio)) {
+  filemap_release_folio(folio, 0);
+  folio_unlock(folio);
+}
+}
 
-/**
- * scan_node - scan a node's LRU lists
- * 
- * @pgdat:	node data struct
- * @nid:	node ID number
- * @reclaim:	memory reclaim cookie
- *
- * This is responsible for scanning the lruvec per memory cgroup.
- */
-static void scan_node(pg_data_t *pgdat, 
-		struct scan_control *sc,
-		struct mem_cgroup_reclaim_cookie *reclaim)
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
+// node migration
+if (pgdat->pm_node != 0) {
+//pr_debug("active pm_node");
+if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
+  // pr_debug("set promote");
+  //SetPagePromote(page); NEEDS TO BE MODULE TRACKED
+  folio_set_promote(folio);
+  list_add(&folio->lru, &l_promote);
+  /* ADDED: Track page access pattern NOW, after promotion decision */
+  track_folio_access(folio, pgdat, "ACTIVE_LIST->PROMOTE");
+  continue;
+}
+}
 
-	enum lru_list lru;
-	struct mem_cgroup *memcg;
-	int nid = pgdat->node_id;
-	int memcg_count;
-	
-	/* Timing and page count tracking */
-	u64 scan_start_time, scan_end_time;
-	u64 total_scan_time_us;
-	unsigned long total_pages_scanned = 0;
+// might not need, we only care about promoting here in the
+// module
+/*
+if (sc->only_promote) {
+list_add(&folio->lru, &l_active);
+continue;
+}
+*/
 
-	scan_start_time = ktime_get_ns();
+// Referenced or rmap lock contention: rotate
+if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup,
+       &vm_flags) != 0) {
+/*
+  Identify referenced, file-backed active folios and
+  give them one more trip around the active list. So
+  that executable code get better chances to stay in
+  memory under moderate memory pressure.  Anon folios
+  are not likely to be evicted by use-once streaming
+  IO, plus JVM can create lots of anon VM_EXEC folios,
+  so we ignore them here.
+*/
+if ((vm_flags & VM_EXEC) && folio_is_file_lru(folio)) {
+  nr_rotated += folio_nr_pages(folio);
+  list_add(&folio->lru, &l_active);
+  /* ADDED: Track page access pattern for rotated pages */
+  track_folio_access(folio, pgdat, "ACTIVE_LIST->ROTATED");
+  continue;
+}
+}
 
-	memset(&sc->nr, 0, sizeof(sc->nr));
-	memcg = ktmm_mem_cgroup_iter(NULL, NULL, reclaim);
-	sc->target_mem_cgroup = memcg;
+folio_clear_active(folio);	// we are de-activating
+folio_set_workingset(folio);
+list_add(&folio->lru, &l_inactive);
+/* ADDED: Track page access pattern for deactivated pages (will show as not accessed) */
+track_folio_access(folio, pgdat, "ACTIVE_LIST->INACTIVE");
+}
 
-	//pr_info("scanning lists on node %d", nid);
-	memcg_count = 0;
-	do {
-		struct lruvec *lruvec = &memcg->nodeinfo[nid]->lruvec;
-		unsigned long reclaimed;
-		unsigned long scanned;
+// Move folios back to the lru list.
+spin_lock_irq(&lruvec->lru_lock);
 
-		memcg_count += 1;
+nr_activate = ktmm_move_folios_to_lru(lruvec, &l_active);
+nr_deactivate = ktmm_move_folios_to_lru(lruvec, &l_inactive);
+nr_promote = ktmm_move_folios_to_lru(lruvec, &l_promote);
 
-		if (ktmm_cgroup_below_min(memcg)) {
-			/*
-			 * Hard protection.
-			 * If there is no reclaimable memory, OOM.
-			 */
-			continue;
-		} else if (ktmm_cgroup_below_low(memcg)) {
-			/*
-			 * Soft protection.
-			 * Respect the protection only as long as
-			 * there is an unprotected supply of 
-			 * reclaimable memory from other cgroups.
-			 */
-			if (!sc->memcg_low_reclaim) {
-				sc->memcg_low_skipped = 1;
-				continue;
-			}
-			// memcg_memory_event(memcg, MEMCG_LOW);
-		}
+// pr_debug("pgdat %d folio activated: %d", nid, nr_activate);
+// pr_debug("pgdat %d folio deactivated: %d", nid, nr_deactivate);
+// pr_debug("pgdat %d folio promoted: %d", nid, nr_promote);
 
-		reclaimed = sc->nr_reclaimed;
-		scanned = sc->nr_scanned;
+// Keep all free folios in l_active list
+list_splice(&l_inactive, &l_active);
 
-		for_each_evictable_lru(lru) {
-			unsigned long nr_to_scan = 1024;  //3000000//sudarshan changed this to 256 for better page access detection
+__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
 
-			scan_list(lru, nr_to_scan, lruvec, sc, pgdat);
-			
-			/* Track total pages scanned across all LRU lists */
-			total_pages_scanned += nr_to_scan;
-		}
-	} while ((memcg = ktmm_mem_cgroup_iter(NULL, memcg, NULL)));
-	
-	/* Calculate and print scan statistics */
-	scan_end_time = ktime_get_ns();
-	total_scan_time_us = (scan_end_time - scan_start_time) / 1000;  /* Convert nanoseconds to microseconds */
-	
-	// printk(KERN_INFO "*** SCAN_STATS (Node %d): Total Pages Scanned: %lu, Total Scan Time: %llu us ***\n", 
-	//        nid, total_pages_scanned, total_scan_time_us);
+spin_unlock_irq(&lruvec->lru_lock);
+
+ktmm_cgroup_uncharge_list(&l_active);
+ktmm_free_unref_page_list(&l_active);
 }
 
 
