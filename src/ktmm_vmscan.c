@@ -1,7 +1,7 @@
 /*
- *  ktmm_vmscan.c
+ * ktmm_vmscan.c
  *
- *  Page scanning and related functions.
+ * Page scanning and related functions.
  */
 
 //#define pr_fmt(fmt) "[ KTMM Mod ] vmscan - " fmt
@@ -253,14 +253,11 @@ static int ktmm_folio_referenced(struct folio *folio, int is_locked,
 
 /**
  * track_folio_access - track if folio was previously accessed
- * 
- * @folio: folio to check
+ * * @folio: folio to check
  * @pgdat: node data to determine node type
  * @location: descriptive string for logging context
- * 
- * Returns: 1 if page was previously accessed, 0 if first access
- * 
- * This function checks the referenced bit and if it's set (accessed),
+ * * Returns: 1 if page was previously accessed, 0 if first access
+ * * This function checks the referenced bit and if it's set (accessed),
  * it prints the access information and immediately clears the bit.
  * This way, if the same folio is checked again in the same scan cycle,
  * it won't show as accessed again (avoiding duplicate logging).
@@ -461,8 +458,7 @@ static inline bool ktmm_folio_needs_release(struct folio *folio)
 /**
  * ktmm_migrate_folio_manual - manually migrate a single folio to target node
  * Following the exact pattern from migration.c for kernel 5.3
- * 
- * @folio: folio to migrate
+ * * @folio: folio to migrate
  * @target_node: destination NUMA node
  * @pgdat: page data structure
  *
@@ -776,88 +772,94 @@ static void scan_active_list(unsigned long nr_to_scan,
  * folios when neccessary.
  */
 static unsigned long scan_inactive_list(unsigned long nr_to_scan,
-					struct lruvec *lruvec,
-					struct scan_control *sc,
-					enum lru_list lru,
-					struct pglist_data *pgdat)
+  struct lruvec *lruvec,
+  struct scan_control *sc,
+  enum lru_list lru,
+  struct pglist_data *pgdat)
 {
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
+LIST_HEAD(folio_list);
+LIST_HEAD(l_active); 
+unsigned long nr_scanned;
+unsigned long nr_taken = 0;
+unsigned long nr_migrated = 0;
+unsigned long nr_promoted = 0; // New counter for local promotion
+unsigned long vm_flags;
+bool file = is_file_lru(lru);
+int nid = pgdat->node_id;
 
-	LIST_HEAD(folio_list);
-	unsigned long nr_scanned;
-	unsigned long nr_taken = 0;
-	unsigned long nr_migrated = 0;
-	unsigned long nr_reclaimed = 0;
-	bool file = is_file_lru(lru);
-	int nid = pgdat->node_id;
-	//pr_info("scanning inactive list");
+ktmm_lru_add_drain();
 
-	// make sure pages in per-cpu lru list are added
-	ktmm_lru_add_drain();
+spin_lock_irq(&lruvec->lru_lock);
+nr_taken = ktmm_isolate_lru_folios(nr_to_scan, lruvec, &folio_list,
+     &nr_scanned, sc, lru);
+__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
+spin_unlock_irq(&lruvec->lru_lock);
 
-	// We want to isolate the pages we are going to scan.
-	spin_lock_irq(&lruvec->lru_lock);
+if (nr_taken == 0) return 0;
 
-	nr_taken = ktmm_isolate_lru_folios(nr_to_scan, lruvec, &folio_list,
-				     &nr_scanned, sc, lru);
+struct folio *folio, *next;
+// DRAM Node ID is usually 0. PMEM Node ID is stored in pmem_node_id.
+int dram_node = 0; 
+int pmem_node = pmem_node_id;
 
-	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
+list_for_each_entry_safe(folio, next, &folio_list, lru) {
 
-	spin_unlock_irq(&lruvec->lru_lock);
+// CHECK 1: Reactivate / Promote referenced pages
+if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
 
-	if (nr_taken == 0) return 0;
-
-	/* ADDED: Track access patterns for each folio in inactive list */
-	// DISABLED: Too much console output
-	// if (!list_empty(&folio_list)) {
-	// 	struct folio *folio, *next;
-	// 	
-	// 	list_for_each_entry_safe(folio, next, &folio_list, lru) {
-	// 		/* Track access pattern for debugging/monitoring */
-	// 		track_folio_access(folio, pgdat, "INACTIVE_LIST");
-	// 	}
-	// }
-
-	//migrate pages down to the pmem node
-	// Manual migration following migration.c pattern
-	// Migrate page-by-page from DRAM to PMEM
-	if (pgdat->pm_node == 0 && pmem_node_id != -1) {
-		struct folio *folio, *next;
-		int target_node = pmem_node_id;  // PMEM node
-		int migrated_count = 0;
-		
-		list_for_each_entry_safe(folio, next, &folio_list, lru) {
-			int rc = ktmm_migrate_folio_manual(folio, target_node, pgdat);
-			if (rc == 0) {
-				migrated_count++;
-				// Remove from list since migration succeeded
-				list_del(&folio->lru);
-			}
-			// If migration fails, leave it in list to be put back
-		}
-		
-		nr_migrated = migrated_count;
-		if (nr_migrated > 0) {
-			__mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
-			/* Update the total demoted counter */
-			atomic64_add(nr_migrated, &total_pages_demoted);
-			// printk("pgdat %d DEMOTED %lu folios from DRAM to PMEM", nid, nr_migrated);
-		}
-	}
-  
-	spin_lock_irq(&lruvec->lru_lock);
-
-	ktmm_move_folios_to_lru(lruvec, &folio_list);
-	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
-
-	spin_unlock_irq(&lruvec->lru_lock);
-
-	ktmm_cgroup_uncharge_list(&folio_list);
-	ktmm_free_unref_page_list(&folio_list);
-
-	return nr_migrated;
+// SUB-CASE A: We are on PMEM. This page is hot. PROMOTE IT TO DRAM NOW!
+if (nid == pmem_node && dram_node != -1) {
+        // Try to migrate to DRAM (Node 0)
+int rc = ktmm_migrate_folio_manual(folio, dram_node, pgdat);
+if (rc == 0) {
+  nr_promoted++;
+  list_del(&folio->lru); // Removed from list, migration handled ownership
+            // Verify migration success in stats
+            atomic64_add(1, &total_pages_promoted);
+            continue; 
+}
+        // If migration failed, fall through to SUB-CASE B (just activate it)
 }
 
+// SUB-CASE B: We are on DRAM (Rescue) OR Promotion Failed.
+    // Just move to Active list so we don't demote it.
+folio_set_active(folio); 
+list_move(&folio->lru, &l_active);
+continue;
+}
+
+// CHECK 2: Demotion Logic (DRAM -> PMEM)
+if (nid == dram_node && pmem_node != -1) {
+int rc = ktmm_migrate_folio_manual(folio, pmem_node, pgdat);
+if (rc == 0) {
+nr_migrated++;
+list_del(&folio->lru);
+}
+}
+}
+
+if (nr_migrated > 0) {
+__mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
+atomic64_add(nr_migrated, &total_pages_demoted);
+}
+
+// Note: We don't usually track NR_PROMOTED in node state here, 
+// but we updated the global atomic counter above.
+
+spin_lock_irq(&lruvec->lru_lock);
+ktmm_move_folios_to_lru(lruvec, &folio_list); 
+ktmm_move_folios_to_lru(lruvec, &l_active);   
+__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
+spin_unlock_irq(&lruvec->lru_lock);
+
+ktmm_cgroup_uncharge_list(&folio_list);
+ktmm_free_unref_page_list(&folio_list);
+
+ktmm_cgroup_uncharge_list(&l_active);
+ktmm_free_unref_page_list(&l_active);
+
+return nr_migrated;
+}
 
 /* SIMILAR TO: shrink_list() */
 /**
@@ -889,8 +891,7 @@ static unsigned long scan_list(enum lru_list lru,
 
 /**
  * scan_node - scan a node's LRU lists
- * 
- * @pgdat:	node data struct
+ * * @pgdat:	node data struct
  * @nid:	node ID number
  * @reclaim:	memory reclaim cookie
  *
@@ -951,7 +952,7 @@ static void scan_node(pg_data_t *pgdat,
 		scanned = sc->nr_scanned;
 
 		for_each_evictable_lru(lru) {
-			unsigned long nr_to_scan = 3000000;  //3000000//sudarshan changed this to 256 for better page access detection
+			unsigned long nr_to_scan = 1024;  //3000000//sudarshan changed this to 256 for better page access detection
 
 			scan_list(lru, nr_to_scan, lruvec, sc, pgdat);
 			
