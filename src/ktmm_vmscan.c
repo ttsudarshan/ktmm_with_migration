@@ -1,7 +1,7 @@
 /*
- *  ktmm_vmscan.c
+ * ktmm_vmscan.c
  *
- *  Page scanning and related functions.
+ * Page scanning and related functions.
  */
 
 //#define pr_fmt(fmt) "[ KTMM Mod ] vmscan - " fmt
@@ -253,14 +253,11 @@ static int ktmm_folio_referenced(struct folio *folio, int is_locked,
 
 /**
  * track_folio_access - track if folio was previously accessed
- * 
- * @folio: folio to check
+ * * @folio: folio to check
  * @pgdat: node data to determine node type
  * @location: descriptive string for logging context
- * 
- * Returns: 1 if page was previously accessed, 0 if first access
- * 
- * This function checks the referenced bit and if it's set (accessed),
+ * * Returns: 1 if page was previously accessed, 0 if first access
+ * * This function checks the referenced bit and if it's set (accessed),
  * it prints the access information and immediately clears the bit.
  * This way, if the same folio is checked again in the same scan cycle,
  * it won't show as accessed again (avoiding duplicate logging).
@@ -461,8 +458,7 @@ static inline bool ktmm_folio_needs_release(struct folio *folio)
 /**
  * ktmm_migrate_folio_manual - manually migrate a single folio to target node
  * Following the exact pattern from migration.c for kernel 5.3
- * 
- * @folio: folio to migrate
+ * * @folio: folio to migrate
  * @target_node: destination NUMA node
  * @pgdat: page data structure
  *
@@ -784,10 +780,13 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
   //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
 
 	LIST_HEAD(folio_list);
+	LIST_HEAD(l_active); // List to hold pages that need to be reactivated
 	unsigned long nr_scanned;
 	unsigned long nr_taken = 0;
 	unsigned long nr_migrated = 0;
 	unsigned long nr_reclaimed = 0;
+	unsigned long nr_activated = 0;
+	unsigned long vm_flags;
 	bool file = is_file_lru(lru);
 	int nid = pgdat->node_id;
 	//pr_info("scanning inactive list");
@@ -818,42 +817,58 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	// 	}
 	// }
 
-	//migrate pages down to the pmem node
-	// Manual migration following migration.c pattern
-	// Migrate page-by-page from DRAM to PMEM
-	if (pgdat->pm_node == 0 && pmem_node_id != -1) {
-		struct folio *folio, *next;
-		int target_node = pmem_node_id;  // PMEM node
-		int migrated_count = 0;
+	// Process pages: Migrate unreferenced DRAM pages to PMEM, 
+	// or reactivate referenced pages (especially important for PMEM pages!)
+	struct folio *folio, *next;
+	int target_node = pmem_node_id;  // PMEM node
+
+	list_for_each_entry_safe(folio, next, &folio_list, lru) {
 		
-		list_for_each_entry_safe(folio, next, &folio_list, lru) {
+		// CHECK 1: Reactivate referenced pages.
+		// If the page is referenced, we must move it to the ACTIVE list.
+		// This applies to both DRAM (stops bad demotion) and PMEM (allows promotion).
+		if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
+			folio_set_active(folio); 
+			list_add(&folio->lru, &l_active);
+			nr_activated++;
+			continue;
+		}
+
+		// CHECK 2: Demotion Logic
+		// Only migrate if we are on DRAM (pm_node == 0) and pmem is available.
+		// Note: We already know it's NOT referenced because of the check above.
+		if (pgdat->pm_node == 0 && pmem_node_id != -1) {
 			int rc = ktmm_migrate_folio_manual(folio, target_node, pgdat);
 			if (rc == 0) {
-				migrated_count++;
+				nr_migrated++;
 				// Remove from list since migration succeeded
 				list_del(&folio->lru);
 			}
-			// If migration fails, leave it in list to be put back
+			// If migration fails, leave it in list to be put back to inactive
 		}
-		
-		nr_migrated = migrated_count;
-		if (nr_migrated > 0) {
-			__mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
-			/* Update the total demoted counter */
-			atomic64_add(nr_migrated, &total_pages_demoted);
-			// printk("pgdat %d DEMOTED %lu folios from DRAM to PMEM", nid, nr_migrated);
-		}
+	}
+
+	if (nr_migrated > 0) {
+		__mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
+		/* Update the total demoted counter */
+		atomic64_add(nr_migrated, &total_pages_demoted);
+		// printk("pgdat %d DEMOTED %lu folios from DRAM to PMEM", nid, nr_migrated);
 	}
   
 	spin_lock_irq(&lruvec->lru_lock);
 
-	ktmm_move_folios_to_lru(lruvec, &folio_list);
+	ktmm_move_folios_to_lru(lruvec, &folio_list); // Put back remaining inactive pages
+	ktmm_move_folios_to_lru(lruvec, &l_active);   // Put back newly active pages
+	
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
 
 	spin_unlock_irq(&lruvec->lru_lock);
 
 	ktmm_cgroup_uncharge_list(&folio_list);
 	ktmm_free_unref_page_list(&folio_list);
+	
+	ktmm_cgroup_uncharge_list(&l_active);
+	ktmm_free_unref_page_list(&l_active);
 
 	return nr_migrated;
 }
@@ -889,8 +904,7 @@ static unsigned long scan_list(enum lru_list lru,
 
 /**
  * scan_node - scan a node's LRU lists
- * 
- * @pgdat:	node data struct
+ * * @pgdat:	node data struct
  * @nid:	node ID number
  * @reclaim:	memory reclaim cookie
  *
