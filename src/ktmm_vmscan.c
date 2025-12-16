@@ -777,84 +777,79 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
   enum lru_list lru,
   struct pglist_data *pgdat)
 {
-//printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
 LIST_HEAD(folio_list);
-LIST_HEAD(l_active); // List to hold pages that need to be reactivated
+LIST_HEAD(l_active); 
 unsigned long nr_scanned;
 unsigned long nr_taken = 0;
 unsigned long nr_migrated = 0;
-unsigned long nr_reclaimed = 0;
-unsigned long nr_activated = 0;
+unsigned long nr_promoted = 0; // New counter for local promotion
 unsigned long vm_flags;
 bool file = is_file_lru(lru);
 int nid = pgdat->node_id;
-//pr_info("scanning inactive list");
 
-// make sure pages in per-cpu lru list are added
 ktmm_lru_add_drain();
 
-// We want to isolate the pages we are going to scan.
 spin_lock_irq(&lruvec->lru_lock);
-
 nr_taken = ktmm_isolate_lru_folios(nr_to_scan, lruvec, &folio_list,
      &nr_scanned, sc, lru);
-
 __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
-
 spin_unlock_irq(&lruvec->lru_lock);
 
 if (nr_taken == 0) return 0;
 
-// Process pages: Migrate unreferenced DRAM pages to PMEM, 
-// or reactivate referenced pages (especially important for PMEM pages!)
 struct folio *folio, *next;
-int target_node = pmem_node_id;  // PMEM node
+// DRAM Node ID is usually 0. PMEM Node ID is stored in pmem_node_id.
+int dram_node = 0; 
+int pmem_node = pmem_node_id;
 
 list_for_each_entry_safe(folio, next, &folio_list, lru) {
 
-// CHECK 1: Reactivate referenced pages.
-// If the page is referenced, we must move it to the ACTIVE list.
+// CHECK 1: Reactivate / Promote referenced pages
 if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
+
+// SUB-CASE A: We are on PMEM. This page is hot. PROMOTE IT TO DRAM NOW!
+if (nid == pmem_node && dram_node != -1) {
+        // Try to migrate to DRAM (Node 0)
+int rc = ktmm_migrate_folio_manual(folio, dram_node, pgdat);
+if (rc == 0) {
+  nr_promoted++;
+  list_del(&folio->lru); // Removed from list, migration handled ownership
+            // Verify migration success in stats
+            atomic64_add(1, &total_pages_promoted);
+            continue; 
+}
+        // If migration failed, fall through to SUB-CASE B (just activate it)
+}
+
+// SUB-CASE B: We are on DRAM (Rescue) OR Promotion Failed.
+    // Just move to Active list so we don't demote it.
 folio_set_active(folio); 
-
-    /* !!! CRITICAL FIX !!! 
-     * Used list_move instead of list_add.
-     * list_add corrupts folio_list because the page is still linked there.
-     * list_move safely deletes it from folio_list first.
-     */
 list_move(&folio->lru, &l_active);
-
-nr_activated++;
 continue;
 }
 
-// CHECK 2: Demotion Logic
-// Only migrate if we are on DRAM (pm_node == 0) and pmem is available.
-if (pgdat->pm_node == 0 && pmem_node_id != -1) {
-int rc = ktmm_migrate_folio_manual(folio, target_node, pgdat);
+// CHECK 2: Demotion Logic (DRAM -> PMEM)
+if (nid == dram_node && pmem_node != -1) {
+int rc = ktmm_migrate_folio_manual(folio, pmem_node, pgdat);
 if (rc == 0) {
 nr_migrated++;
-// Remove from list since migration succeeded
 list_del(&folio->lru);
 }
-// If migration fails, leave it in list to be put back to inactive
 }
 }
 
 if (nr_migrated > 0) {
 __mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
-/* Update the total demoted counter */
 atomic64_add(nr_migrated, &total_pages_demoted);
 }
 
+// Note: We don't usually track NR_PROMOTED in node state here, 
+// but we updated the global atomic counter above.
+
 spin_lock_irq(&lruvec->lru_lock);
-
-ktmm_move_folios_to_lru(lruvec, &folio_list); // Put back remaining inactive pages
-ktmm_move_folios_to_lru(lruvec, &l_active);   // Put back newly active pages
-
+ktmm_move_folios_to_lru(lruvec, &folio_list); 
+ktmm_move_folios_to_lru(lruvec, &l_active);   
 __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
-
 spin_unlock_irq(&lruvec->lru_lock);
 
 ktmm_cgroup_uncharge_list(&folio_list);
@@ -865,7 +860,6 @@ ktmm_free_unref_page_list(&l_active);
 
 return nr_migrated;
 }
-
 
 /* SIMILAR TO: shrink_list() */
 /**
