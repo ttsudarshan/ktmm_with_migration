@@ -595,6 +595,9 @@ static void scan_promote_list(unsigned long nr_to_scan,
 			if (rc == 0) {
 				migrated_count++;
 				// Remove from list since migration succeeded
+        printk(KERN_INFO "Sudarshan total migrated: %d\n", migrated_count);
+
+
 				list_del(&folio->lru);
 			}
 			// If migration fails, leave it in list to be put back
