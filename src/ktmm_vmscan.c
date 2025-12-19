@@ -548,6 +548,7 @@ static void scan_promote_list(unsigned long nr_to_scan,
 	LIST_HEAD(l_hold);
 	int file = is_file_lru(lru);
 	int nid = pgdat->node_id;
+	const char *list_type = file ? "file" : "anon";
 
 	struct list_head *src = &lruvec->lists[lru];
 
@@ -569,8 +570,11 @@ static void scan_promote_list(unsigned long nr_to_scan,
 
 	spin_unlock_irq(&lruvec->lru_lock);
 
-	// pr_debug("pgdat %d scanned %lu on promote list", nid, nr_scanned);
-	// pr_debug("pgdat %d taken %lu on promote list", nid, nr_taken);
+	/* DEBUG: Print what we took from promote list */
+	if (nr_taken > 0) {
+		printk(KERN_INFO "  [PMEM] PROMOTE_%s: scanned=%lu, taken=%lu\n",
+		       list_type, nr_scanned, nr_taken);
+	}
 
 	/* ADDED: Track access patterns for each folio in promote list */
 	// DISABLED: Too much console output
@@ -589,26 +593,30 @@ static void scan_promote_list(unsigned long nr_to_scan,
 		struct folio *folio, *next;
 		int target_node = 0;  // DRAM node
 		int migrated_count = 0;
+		int failed_count = 0;
 		
 		list_for_each_entry_safe(folio, next, &l_hold, lru) {
 			int rc = ktmm_migrate_folio_manual(folio, target_node, pgdat);
 			if (rc == 0) {
 				migrated_count++;
 				// Remove from list since migration succeeded
-        printk(KERN_INFO "Sudarshan total migrated: %d\n", migrated_count);
-
-
 				list_del(&folio->lru);
+			} else {
+				failed_count++;
 			}
 			// If migration fails, leave it in list to be put back
 		}
 		
 		nr_migrated = migrated_count;
+		
+		/* DEBUG: Print migration results */
+		printk(KERN_INFO "  [PMEM] PROMOTE->DRAM: migrated=%lu, failed=%d\n",
+		       nr_migrated, failed_count);
+		
 		if (nr_migrated > 0) {
 			__mod_node_page_state(pgdat, NR_PROMOTED, nr_migrated);
 			/* Update the total promoted counter */
 			atomic64_add(nr_migrated, &total_pages_promoted);
-			// printk("pgdat %d PROMOTED %lu folios from PMEM to DRAM", nid, nr_migrated);
 		}
 	}
 	spin_lock_irq(&lruvec->lru_lock);
@@ -656,6 +664,9 @@ static void scan_active_list(unsigned long nr_to_scan,
 	unsigned nr_rotated = 0;
 	int file = is_file_lru(lru);
 	int nid = pgdat->node_id;
+	const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
+	const char *list_type = file ? "file" : "anon";
+	unsigned long nr_referenced = 0;
 	
 	//pr_info("scanning active list");
 
@@ -670,6 +681,10 @@ static void scan_active_list(unsigned long nr_to_scan,
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
 
 	spin_unlock_irq(&lruvec->lru_lock);
+
+	/* DEBUG: Print what we took from active list */
+	printk(KERN_INFO "  [%s] ACTIVE_%s: scanned=%lu, taken=%lu\n",
+	       node_type, list_type, nr_scanned, nr_taken);
 
 	while (!list_empty(&l_hold)) {
 		struct folio *folio;
@@ -700,6 +715,7 @@ static void scan_active_list(unsigned long nr_to_scan,
 			if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
 				// pr_debug("set promote");
 				//SetPagePromote(page); NEEDS TO BE MODULE TRACKED
+				nr_referenced++;
 				folio_set_promote(folio);
 				list_add(&folio->lru, &l_promote);
 				continue;
@@ -746,9 +762,11 @@ static void scan_active_list(unsigned long nr_to_scan,
 	nr_deactivate = ktmm_move_folios_to_lru(lruvec, &l_inactive);
 	nr_promote = ktmm_move_folios_to_lru(lruvec, &l_promote);
 
-	// pr_debug("pgdat %d folio activated: %d", nid, nr_activate);
-	// pr_debug("pgdat %d folio deactivated: %d", nid, nr_deactivate);
-	// pr_debug("pgdat %d folio promoted: %d", nid, nr_promote);
+	/* DEBUG: Print where folios went */
+	if (pgdat->pm_node != 0) {
+		printk(KERN_INFO "  [PMEM] ACTIVE->: stay_active=%u, to_inactive=%u, to_promote=%u (referenced=%lu)\n",
+		       nr_activate, nr_deactivate, nr_promote, nr_referenced);
+	}
 
 	// Keep all free folios in l_active list
 	list_splice(&l_inactive, &l_active);
@@ -793,6 +811,8 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	unsigned long nr_reclaimed = 0;
 	bool file = is_file_lru(lru);
 	int nid = pgdat->node_id;
+	const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
+	const char *list_type = file ? "file" : "anon";
 	//pr_info("scanning inactive list");
 
 	// make sure pages in per-cpu lru list are added
@@ -809,6 +829,10 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	spin_unlock_irq(&lruvec->lru_lock);
 
 	if (nr_taken == 0) return 0;
+
+	/* DEBUG: Print what we took from inactive list */
+	printk(KERN_INFO "  [%s] INACTIVE_%s: scanned=%lu, taken=%lu\n",
+	       node_type, list_type, nr_scanned, nr_taken);
 
 	/* ADDED: Track access patterns for each folio in inactive list */
 	// DISABLED: Too much console output
@@ -844,28 +868,7 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 			__mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
 			/* Update the total demoted counter */
 			atomic64_add(nr_migrated, &total_pages_demoted);
-			// printk("pgdat %d DEMOTED %lu folios from DRAM to PMEM", nid, nr_migrated);
-		}
-	}
-
-	/*
-	 * PMEM Node: Check if pages on inactive list have been referenced.
-	 * If referenced, mark them active so they move to the active list
-	 * and can eventually be promoted back to DRAM.
-	 * 
-	 * This is the missing link that allows pages to flow:
-	 * PMEM inactive -> PMEM active -> PMEM promote -> DRAM
-	 */
-	if (pgdat->pm_node != 0) {
-		struct folio *folio, *next;
-		
-		list_for_each_entry_safe(folio, next, &folio_list, lru) {
-			unsigned long vm_flags;
-			
-			/* If folio was accessed, mark it active so it moves to active list */
-			if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
-				folio_set_active(folio);
-			}
+			printk(KERN_INFO "  [DRAM] DEMOTED %lu folios to PMEM\n", nr_migrated);
 		}
 	}
   
@@ -930,6 +933,7 @@ static void scan_node(pg_data_t *pgdat,
 	struct mem_cgroup *memcg;
 	int nid = pgdat->node_id;
 	int memcg_count;
+	const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
 	
 	/* Timing and page count tracking */
 	u64 scan_start_time, scan_end_time;
@@ -973,6 +977,24 @@ static void scan_node(pg_data_t *pgdat,
 
 		reclaimed = sc->nr_reclaimed;
 		scanned = sc->nr_scanned;
+
+		/*
+		 * DEBUG: Print list sizes before scanning
+		 * This helps us understand if pages are moving between lists
+		 */
+		{
+			unsigned long inactive_anon = lruvec_lru_size(lruvec, LRU_INACTIVE_ANON, MAX_NR_ZONES);
+			unsigned long active_anon = lruvec_lru_size(lruvec, LRU_ACTIVE_ANON, MAX_NR_ZONES);
+			unsigned long inactive_file = lruvec_lru_size(lruvec, LRU_INACTIVE_FILE, MAX_NR_ZONES);
+			unsigned long active_file = lruvec_lru_size(lruvec, LRU_ACTIVE_FILE, MAX_NR_ZONES);
+			
+			printk(KERN_INFO "*** LIST_SIZES [%s node %d]: "
+			       "inactive_anon=%lu, active_anon=%lu | "
+			       "inactive_file=%lu, active_file=%lu ***\n",
+			       node_type, nid,
+			       inactive_anon, active_anon,
+			       inactive_file, active_file);
+		}
 
 		for_each_evictable_lru(lru) {
 			unsigned long nr_to_scan = 1024;  //3000000//sudarshan changed this to 256 for better page access detection
