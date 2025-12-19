@@ -460,56 +460,80 @@ static inline bool ktmm_folio_needs_release(struct folio *folio)
 
 /**
  * ktmm_migrate_folio_manual - manually migrate a single folio to target node
- * Following the exact pattern from migration.c for kernel 5.3
  * 
  * @folio: folio to migrate
  * @target_node: destination NUMA node
  * @pgdat: page data structure
  *
  * Returns: 0 on success, negative error code on failure
+ *
+ * This function properly locks the folio before attempting migration,
+ * which was the cause of the previous kernel crash.
  */
 static int ktmm_migrate_folio_manual(struct folio *folio, int target_node, struct pglist_data *pgdat)
 {
-	struct page *page = &folio->page;
 	struct page *newpage = NULL;
+	struct folio *dst_folio = NULL;
 	struct address_space *mapping;
-	int rc = -EINVAL;
+	int rc = -EAGAIN;
 	
-	// Get the mapping (similar to migration.c line 93)
+	/* Try to lock the folio - don't block if we can't get it */
+	if (!folio_trylock(folio)) {
+		return -EAGAIN;
+	}
+	
+	/* Check if folio is undergoing writeback - skip if so */
+	if (folio_test_writeback(folio)) {
+		rc = -EBUSY;
+		goto unlock;
+	}
+	
+	/* Get the mapping */
 	mapping = folio_mapping(folio);
 	if (!mapping) {
-		// No mapping, can't migrate
-		return -EINVAL;
+		rc = -EINVAL;
+		goto unlock;
 	}
 	
-	// Check if page is suitable for migration (basic checks from migration.c)
+	/* Check if page is suitable for migration */
 	if (folio_test_unevictable(folio)) {
-		return -EINVAL;
+		rc = -EINVAL;
+		goto unlock;
 	}
 	
-	// Allocate new page on target node (migration.c line 146)
-	newpage = alloc_pages_node(target_node, GFP_HIGHUSER_MOVABLE, 0);
+	/* Allocate new page on target node */
+	newpage = alloc_pages_node(target_node, GFP_HIGHUSER_MOVABLE | __GFP_NOWARN, 0);
 	if (!newpage) {
-		return -ENOMEM;
+		rc = -ENOMEM;
+		goto unlock;
 	}
 	
-	// Try migration via mapping->a_ops->migratepage if available (migration.c line 153)
+	dst_folio = page_folio(newpage);
+	
+	/* Lock the destination folio */
+	folio_lock(dst_folio);
+	
+	/* Try migration via mapping->a_ops->migrate_folio if available */
 	if (mapping->a_ops && mapping->a_ops->migrate_folio) {
-		rc = mapping->a_ops->migrate_folio(mapping, page_folio(newpage), folio, MIGRATE_SYNC);
+		rc = mapping->a_ops->migrate_folio(mapping, dst_folio, folio, MIGRATE_ASYNC);
 		
 		if (rc == MIGRATEPAGE_SUCCESS) {
-			// Success! Don't free newpage, ownership transferred
+			/* Success! Unlock dst and return - ownership transferred */
+			folio_unlock(dst_folio);
+			folio_unlock(folio);
 			return 0;
-		} else {
-			// Failed, free newpage and return error
-			__free_pages(newpage, 0);
-			return rc;
 		}
+	} else {
+		rc = -ENOSYS;
 	}
 	
-	// If no migrate_folio operation, free newpage and fail
+	/* Migration failed - cleanup */
+	folio_unlock(dst_folio);
 	__free_pages(newpage, 0);
-	return -ENOSYS;
+
+unlock:
+	folio_unlock(folio);
+	return rc;
 }
 
 /**
@@ -583,8 +607,7 @@ static void scan_promote_list(unsigned long nr_to_scan,
 	// 	}
 	// }
 
-	// Manual migration folio by folio
-	// Migrate page-by-page from PMEM to DRAM
+	// Migrate folios from PMEM to DRAM using manual migration
 	if (nr_taken > 0) {
 		struct folio *folio, *next;
 		int target_node = 0;  // DRAM node
@@ -595,9 +618,6 @@ static void scan_promote_list(unsigned long nr_to_scan,
 			if (rc == 0) {
 				migrated_count++;
 				// Remove from list since migration succeeded
-        printk(KERN_INFO "Sudarshan total migrated: %d\n", migrated_count);
-
-
 				list_del(&folio->lru);
 			}
 			// If migration fails, leave it in list to be put back
@@ -821,9 +841,7 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	// 	}
 	// }
 
-	//migrate pages down to the pmem node
-	// Manual migration following migration.c pattern
-	// Migrate page-by-page from DRAM to PMEM
+	// Migrate pages down to the pmem node using manual migration
 	if (pgdat->pm_node == 0 && pmem_node_id != -1) {
 		struct folio *folio, *next;
 		int target_node = pmem_node_id;  // PMEM node
@@ -845,6 +863,27 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 			/* Update the total demoted counter */
 			atomic64_add(nr_migrated, &total_pages_demoted);
 			// printk("pgdat %d DEMOTED %lu folios from DRAM to PMEM", nid, nr_migrated);
+		}
+	}
+
+	/*
+	 * PMEM Node: Check if pages on inactive list have been referenced.
+	 * If referenced, mark them active so they move to the active list
+	 * and can eventually be promoted back to DRAM.
+	 * 
+	 * This is the missing link that allows pages to flow:
+	 * PMEM inactive -> PMEM active -> PMEM promote -> DRAM
+	 */
+	if (pgdat->pm_node != 0) {
+		struct folio *folio, *next;
+		
+		list_for_each_entry_safe(folio, next, &folio_list, lru) {
+			unsigned long vm_flags;
+			
+			/* If folio was accessed, mark it active so it moves to active list */
+			if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
+				folio_set_active(folio);
+			}
 		}
 	}
   
