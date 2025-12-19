@@ -460,7 +460,7 @@ static inline bool ktmm_folio_needs_release(struct folio *folio)
 
 /**
  * ktmm_migrate_folio_manual - manually migrate a single folio to target node
- * Following the exact pattern from migration.c for kernel 5.3
+ * Handles both anonymous and file-backed pages
  * 
  * @folio: folio to migrate
  * @target_node: destination NUMA node
@@ -470,46 +470,69 @@ static inline bool ktmm_folio_needs_release(struct folio *folio)
  */
 static int ktmm_migrate_folio_manual(struct folio *folio, int target_node, struct pglist_data *pgdat)
 {
-	struct page *page = &folio->page;
 	struct page *newpage = NULL;
+	struct folio *dst_folio;
 	struct address_space *mapping;
-	int rc = -EINVAL;
+	int rc = -EAGAIN;
 	
-	// Get the mapping (similar to migration.c line 93)
-	mapping = folio_mapping(folio);
-	if (!mapping) {
-		// No mapping, can't migrate
-		return -EINVAL;
+	/* Try to lock the source folio (non-blocking) */
+	if (!folio_trylock(folio)) {
+		return -EAGAIN;
 	}
 	
-	// Check if page is suitable for migration (basic checks from migration.c)
+	/* Skip if folio is being written back */
+	if (folio_test_writeback(folio)) {
+		rc = -EBUSY;
+		goto unlock_src;
+	}
+	
+	/* Check if page is suitable for migration */
 	if (folio_test_unevictable(folio)) {
-		return -EINVAL;
+		rc = -EINVAL;
+		goto unlock_src;
 	}
 	
-	// Allocate new page on target node (migration.c line 146)
-	newpage = alloc_pages_node(target_node, GFP_HIGHUSER_MOVABLE, 0);
+	/* Allocate new page on target node */
+	newpage = alloc_pages_node(target_node, 
+		GFP_HIGHUSER_MOVABLE | __GFP_NOWARN | __GFP_NOMEMALLOC, 0);
 	if (!newpage) {
-		return -ENOMEM;
+		rc = -ENOMEM;
+		goto unlock_src;
 	}
 	
-	// Try migration via mapping->a_ops->migratepage if available (migration.c line 153)
-	if (mapping->a_ops && mapping->a_ops->migrate_folio) {
-		rc = mapping->a_ops->migrate_folio(mapping, page_folio(newpage), folio, MIGRATE_SYNC);
-		
-		if (rc == MIGRATEPAGE_SUCCESS) {
-			// Success! Don't free newpage, ownership transferred
-			return 0;
-		} else {
-			// Failed, free newpage and return error
-			__free_pages(newpage, 0);
-			return rc;
-		}
+	dst_folio = page_folio(newpage);
+	
+	/* Lock the destination folio */
+	folio_lock(dst_folio);
+	
+	/* Get the mapping - can be NULL for anonymous pages */
+	mapping = folio_mapping(folio);
+	
+	if (mapping && mapping->a_ops && mapping->a_ops->migrate_folio) {
+		/* File-backed page: use the address_space migrate_folio */
+		rc = mapping->a_ops->migrate_folio(mapping, dst_folio, folio, MIGRATE_ASYNC);
+	} else if (folio_test_anon(folio)) {
+		/* Anonymous page: use migrate_folio for anon pages */
+		rc = migrate_folio(mapping, dst_folio, folio, MIGRATE_ASYNC);
+	} else {
+		/* Unknown type, can't migrate */
+		rc = -ENOSYS;
 	}
 	
-	// If no migrate_folio operation, free newpage and fail
+	folio_unlock(dst_folio);
+	
+	if (rc == MIGRATEPAGE_SUCCESS) {
+		/* Success! Ownership transferred, don't free newpage */
+		folio_unlock(folio);
+		return 0;
+	}
+	
+	/* Failed, free newpage */
 	__free_pages(newpage, 0);
-	return -ENOSYS;
+	
+unlock_src:
+	folio_unlock(folio);
+	return rc;
 }
 
 /**
