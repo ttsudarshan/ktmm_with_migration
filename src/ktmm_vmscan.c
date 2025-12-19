@@ -867,6 +867,33 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 			printk(KERN_INFO "  [DRAM] DEMOTED %lu folios to PMEM\n", nr_migrated);
 		}
 	}
+
+	/*
+	 * PMEM Node: Check if pages on inactive list have been referenced.
+	 * If referenced, mark them active so they move to the active list
+	 * and can eventually be promoted back to DRAM.
+	 * 
+	 * This is the missing link that allows pages to flow:
+	 * PMEM inactive -> PMEM active -> PMEM promote -> DRAM
+	 */
+	if (pgdat->pm_node != 0) {
+		struct folio *folio, *next;
+		unsigned long nr_activated = 0;
+		
+		list_for_each_entry_safe(folio, next, &folio_list, lru) {
+			unsigned long vm_flags;
+			
+			/* If folio was accessed, mark it active so it moves to active list */
+			if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
+				folio_set_active(folio);
+				nr_activated++;
+			}
+		}
+		
+		if (nr_activated > 0) {
+			printk(KERN_INFO "  [PMEM] ACTIVATED %lu folios (will move to active list)\n", nr_activated);
+		}
+	}
   
 	spin_lock_irq(&lruvec->lru_lock);
 
