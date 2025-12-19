@@ -879,19 +879,39 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	if (pgdat->pm_node != 0) {
 		struct folio *folio, *next;
 		unsigned long nr_activated = 0;
+		unsigned long nr_checked = 0;
+		unsigned long nr_anon = 0;
+		unsigned long nr_file = 0;
+		unsigned long nr_has_mapping = 0;
 		
 		list_for_each_entry_safe(folio, next, &folio_list, lru) {
-			unsigned long vm_flags;
+			unsigned long vm_flags = 0;
+			int ref_count;
 			
-			/* If folio was accessed, mark it active so it moves to active list */
-			if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
+			nr_checked++;
+			
+			/* Count folio types */
+			if (folio_test_anon(folio))
+				nr_anon++;
+			else
+				nr_file++;
+			
+			if (folio_mapping(folio))
+				nr_has_mapping++;
+			
+			/* Check if folio was accessed */
+			ref_count = ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags);
+			
+			if (ref_count > 0) {
 				folio_set_active(folio);
 				nr_activated++;
 			}
 		}
 		
-		if (nr_activated > 0) {
-			printk(KERN_INFO "  [PMEM] ACTIVATED %lu folios (will move to active list)\n", nr_activated);
+		/* Always print debug info for PMEM inactive scanning */
+		if (nr_checked > 0) {
+			printk(KERN_INFO "  [PMEM] INACTIVE_CHECK: checked=%lu, anon=%lu, file=%lu, has_mapping=%lu, activated=%lu\n",
+			       nr_checked, nr_anon, nr_file, nr_has_mapping, nr_activated);
 		}
 	}
   
