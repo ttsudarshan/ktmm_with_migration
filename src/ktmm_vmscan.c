@@ -547,7 +547,6 @@ static void scan_promote_list(unsigned long nr_to_scan,
 	isolate_mode_t isolate_mode = 0;
 	LIST_HEAD(l_hold);
 	int file = is_file_lru(lru);
-	int nid = pgdat->node_id;
 	const char *list_type = file ? "file" : "anon";
 
 	struct list_head *src = &lruvec->lists[lru];
@@ -663,7 +662,6 @@ static void scan_active_list(unsigned long nr_to_scan,
 	unsigned nr_deactivate, nr_activate, nr_promote;
 	unsigned nr_rotated = 0;
 	int file = is_file_lru(lru);
-	int nid = pgdat->node_id;
 	const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
 	const char *list_type = file ? "file" : "anon";
 	unsigned long nr_referenced = 0;
@@ -808,9 +806,7 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	unsigned long nr_scanned;
 	unsigned long nr_taken = 0;
 	unsigned long nr_migrated = 0;
-	unsigned long nr_reclaimed = 0;
 	bool file = is_file_lru(lru);
-	int nid = pgdat->node_id;
 	const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
 	const char *list_type = file ? "file" : "anon";
 	//pr_info("scanning inactive list");
@@ -950,8 +946,6 @@ static void scan_node(pg_data_t *pgdat,
 	memcg_count = 0;
 	do {
 		struct lruvec *lruvec = &memcg->nodeinfo[nid]->lruvec;
-		unsigned long reclaimed;
-		unsigned long scanned;
 
 		memcg_count += 1;
 
@@ -975,26 +969,10 @@ static void scan_node(pg_data_t *pgdat,
 			// memcg_memory_event(memcg, MEMCG_LOW);
 		}
 
-		reclaimed = sc->nr_reclaimed;
-		scanned = sc->nr_scanned;
-
 		/*
-		 * DEBUG: Print list sizes before scanning
-		 * This helps us understand if pages are moving between lists
+		 * DEBUG: Print which node we're scanning
 		 */
-		{
-			unsigned long inactive_anon = lruvec_lru_size(lruvec, LRU_INACTIVE_ANON, MAX_NR_ZONES);
-			unsigned long active_anon = lruvec_lru_size(lruvec, LRU_ACTIVE_ANON, MAX_NR_ZONES);
-			unsigned long inactive_file = lruvec_lru_size(lruvec, LRU_INACTIVE_FILE, MAX_NR_ZONES);
-			unsigned long active_file = lruvec_lru_size(lruvec, LRU_ACTIVE_FILE, MAX_NR_ZONES);
-			
-			printk(KERN_INFO "*** LIST_SIZES [%s node %d]: "
-			       "inactive_anon=%lu, active_anon=%lu | "
-			       "inactive_file=%lu, active_file=%lu ***\n",
-			       node_type, nid,
-			       inactive_anon, active_anon,
-			       inactive_file, active_file);
-		}
+		printk(KERN_INFO "*** SCANNING [%s node %d] ***\n", node_type, nid);
 
 		for_each_evictable_lru(lru) {
 			unsigned long nr_to_scan = 1024;  //3000000//sudarshan changed this to 256 for better page access detection
