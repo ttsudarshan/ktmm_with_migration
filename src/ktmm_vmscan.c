@@ -839,10 +839,13 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
   //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
 
 	LIST_HEAD(folio_list);
+	LIST_HEAD(l_active);	/* folios to activate (for PMEM node) */
 	unsigned long nr_scanned;
 	unsigned long nr_taken = 0;
 	unsigned long nr_migrated = 0;
 	unsigned long nr_reclaimed = 0;
+	unsigned long nr_activate = 0;
+	unsigned long vm_flags;
 	bool file = is_file_lru(lru);
 	int nid = pgdat->node_id;
 	//pr_info("scanning inactive list");
@@ -876,6 +879,30 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	// 	}
 	// }
 
+	/*
+	 * PMEM NODE: Check if inactive pages are referenced and activate them.
+	 * This is the key step to move pages from inactive -> active list,
+	 * so they can eventually be promoted to DRAM.
+	 * Flow: inactive -> active -> promote -> DRAM
+	 */
+	if (pgdat->pm_node != 0) {
+		struct folio *folio, *next;
+		
+		list_for_each_entry_safe(folio, next, &folio_list, lru) {
+			/* Check if the folio was referenced (accessed) */
+			if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
+				/* Referenced! Move to active list */
+				list_del(&folio->lru);
+				folio_set_active(folio);
+				list_add(&folio->lru, &l_active);
+				nr_activate++;
+				/* Track inactive -> active movement */
+				atomic64_inc(&pages_inactive_to_active);
+			}
+			/* Unreferenced pages stay in folio_list and go back to inactive */
+		}
+	}
+
 	//migrate pages down to the pmem node
 	// Manual migration following migration.c pattern
 	// Migrate page-by-page from DRAM to PMEM
@@ -905,11 +932,18 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
   
 	spin_lock_irq(&lruvec->lru_lock);
 
+	/* Move activated folios to active LRU list (PMEM node only) */
+	if (nr_activate > 0) {
+		ktmm_move_folios_to_lru(lruvec, &l_active);
+	}
+
 	ktmm_move_folios_to_lru(lruvec, &folio_list);
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
 
 	spin_unlock_irq(&lruvec->lru_lock);
 
+	ktmm_cgroup_uncharge_list(&l_active);
+	ktmm_free_unref_page_list(&l_active);
 	ktmm_cgroup_uncharge_list(&folio_list);
 	ktmm_free_unref_page_list(&folio_list);
 
