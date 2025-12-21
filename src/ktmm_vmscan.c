@@ -279,7 +279,7 @@ static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, co
         //          location, folio, node_type, jiffies);
         
         /* Immediately clear the bit after printing so we don't print it again in the same scan */
-        folio_clear_referenced(folio);
+        // folio_clear_referenced(folio);  /* DISABLED: Not clearing reference bit */
     } 
     //else {
     //     printk(KERN_INFO "Not accessed at %s: referenced_bit=0 (folio=%p, node=%s, jiffies=%lu)\n", 
