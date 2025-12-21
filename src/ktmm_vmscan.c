@@ -474,6 +474,7 @@ static int ktmm_migrate_folio_manual(struct folio *folio, int target_node, struc
 	struct folio *dst_folio;
 	struct address_space *mapping;
 	int rc = -EAGAIN;
+	int is_anon = folio_test_anon(folio);
 	
 	/* Try to lock the source folio (non-blocking) */
 	if (!folio_trylock(folio)) {
@@ -511,7 +512,7 @@ static int ktmm_migrate_folio_manual(struct folio *folio, int target_node, struc
 	if (mapping && mapping->a_ops && mapping->a_ops->migrate_folio) {
 		/* File-backed page: use the address_space migrate_folio */
 		rc = mapping->a_ops->migrate_folio(mapping, dst_folio, folio, MIGRATE_ASYNC);
-	} else if (folio_test_anon(folio)) {
+	} else if (is_anon) {
 		/* Anonymous page: use migrate_folio for anon pages */
 		rc = migrate_folio(mapping, dst_folio, folio, MIGRATE_ASYNC);
 	} else {
@@ -871,23 +872,38 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 		struct folio *folio, *next;
 		int target_node = pmem_node_id;  // PMEM node
 		int migrated_count = 0;
+		int anon_migrated = 0, file_migrated = 0;
+		int anon_failed = 0, file_failed = 0;
 		
 		list_for_each_entry_safe(folio, next, &folio_list, lru) {
+			int is_anon = folio_test_anon(folio);
 			int rc = ktmm_migrate_folio_manual(folio, target_node, pgdat);
 			if (rc == 0) {
 				migrated_count++;
+				if (is_anon)
+					anon_migrated++;
+				else
+					file_migrated++;
 				// Remove from list since migration succeeded
 				list_del(&folio->lru);
+			} else {
+				if (is_anon)
+					anon_failed++;
+				else
+					file_failed++;
 			}
 			// If migration fails, leave it in list to be put back
 		}
 		
 		nr_migrated = migrated_count;
+		if (nr_migrated > 0 || anon_failed > 0 || file_failed > 0) {
+			printk(KERN_INFO "  [DRAM] DEMOTION: migrated=%d (anon=%d, file=%d), failed (anon=%d, file=%d)\n",
+			       migrated_count, anon_migrated, file_migrated, anon_failed, file_failed);
+		}
 		if (nr_migrated > 0) {
 			__mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
 			/* Update the total demoted counter */
 			atomic64_add(nr_migrated, &total_pages_demoted);
-			printk(KERN_INFO "  [DRAM] DEMOTED %lu folios to PMEM\n", nr_migrated);
 		}
 	}
 
@@ -905,7 +921,7 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 		unsigned long nr_checked = 0;
 		unsigned long nr_anon = 0;
 		unsigned long nr_file = 0;
-		unsigned long nr_has_mapping = 0;
+		unsigned long nr_mapped = 0;
 		
 		list_for_each_entry_safe(folio, next, &folio_list, lru) {
 			unsigned long vm_flags = 0;
@@ -919,8 +935,9 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 			else
 				nr_file++;
 			
-			if (folio_mapping(folio))
-				nr_has_mapping++;
+			/* Check if page is mapped into any process page tables */
+			if (folio_mapped(folio))
+				nr_mapped++;
 			
 			/* Check if folio was accessed */
 			ref_count = ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags);
@@ -933,8 +950,8 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 		
 		/* Always print debug info for PMEM inactive scanning */
 		if (nr_checked > 0) {
-			printk(KERN_INFO "  [PMEM] INACTIVE_CHECK: checked=%lu, anon=%lu, file=%lu, has_mapping=%lu, activated=%lu\n",
-			       nr_checked, nr_anon, nr_file, nr_has_mapping, nr_activated);
+			printk(KERN_INFO "  [PMEM] INACTIVE_CHECK: checked=%lu, anon=%lu, file=%lu, mapped=%lu, activated=%lu\n",
+			       nr_checked, nr_anon, nr_file, nr_mapped, nr_activated);
 		}
 	}
   
