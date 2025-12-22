@@ -1050,22 +1050,6 @@ static void scan_node(pg_data_t *pgdat,
 			/* Track total pages scanned across all LRU lists */
 			total_pages_scanned += nr_to_scan;
 		}
-
-		/*
-		 * PMEM NODE: Explicitly scan the promote lists.
-		 * for_each_evictable_lru only covers the 4 standard LRU lists,
-		 * NOT the promote lists. So we must scan them explicitly here
-		 * to drain pages from promote list -> DRAM.
-		 */
-		if (pgdat->pm_node != 0) {
-			unsigned long nr_to_scan = 1024;
-			
-			/* Scan promote list for anonymous pages */
-			scan_promote_list(nr_to_scan, lruvec, sc, LRU_PROMOTE_ANON, pgdat);
-			
-			/* Scan promote list for file-backed pages */
-			scan_promote_list(nr_to_scan, lruvec, sc, LRU_PROMOTE_FILE, pgdat);
-		}
 	} while ((memcg = ktmm_mem_cgroup_iter(NULL, memcg, NULL)));
 	
 	/* Calculate and print scan statistics */
