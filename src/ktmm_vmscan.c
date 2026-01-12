@@ -584,6 +584,8 @@ static void scan_promote_list(unsigned long nr_to_scan,
 	isolate_mode_t isolate_mode = 0;
 	LIST_HEAD(l_hold);
 	int file = is_file_lru(lru);
+  printk(KERN_INFO "sudarshan: file = %d (lru = %d)\n", file, lru);
+
 	int nid = pgdat->node_id;
 
 	struct list_head *src = &lruvec->lists[lru];
