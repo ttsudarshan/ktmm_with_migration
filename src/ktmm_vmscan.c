@@ -61,45 +61,27 @@ wait_queue_head_t tmemd_wait[MAX_NUMNODES];
 
 
 /*****************************************************************************
- * Bulk Migration API and Constants (from move_one_page_numa_5_14.c)
+ * Migration Helper Functions (for kernel 6.1+)
  *****************************************************************************/
-
-/* Batch size for bulk migration */
-#define BATCH_N 32
 
 /* Node identifiers */
 #define NODE_DRAM 0
 #define NODE_PMEM 1
 
-/* External bulk migration function */
-extern int uts_migrate_file_pages_bulk_vec(struct page **pages, int nr_pages, int target_nid);
-
 /**
- * is_file_page - check if a page is suitable for bulk migration
- * @page: page to check
- *
- * Returns true if the page is file-backed and suitable for migration.
- * Rejects anonymous pages, huge pages, and pages without valid mappings.
- */
-static __always_inline bool is_file_page(struct page *page)
-{
-	if (PageAnon(page)) return false;
-	if (PageHuge(page) || PageTransHuge(page) || PageCompound(page)) return false;
-	if (!page_mapping(page)) return false;
-	if (!page_mapping(page)->host) return false;
-	return true;
-}
-
-/**
- * is_file_folio - check if a folio is suitable for bulk migration
+ * is_file_folio - check if a folio is suitable for migration
  * @folio: folio to check
  *
  * Returns true if the folio is file-backed and suitable for migration.
- * This is the folio version of is_file_page().
+ * Rejects anonymous pages, huge pages, and pages without valid mappings.
  */
 static __always_inline bool is_file_folio(struct folio *folio)
 {
-	return is_file_page(&folio->page);
+	if (folio_test_anon(folio)) return false;
+	if (folio_test_hugetlb(folio) || folio_test_large(folio)) return false;
+	if (!folio_mapping(folio)) return false;
+	if (!folio_mapping(folio)->host) return false;
+	return true;
 }
 
 
@@ -567,8 +549,7 @@ static inline bool ktmm_folio_needs_release(struct folio *folio)
  * to the active lru list. This function should only really be utilized by the
  * pmem node.
  *
- * Uses the bulk migration API (uts_migrate_file_pages_bulk_vec) to migrate
- * file-backed pages from PMEM to DRAM in batches for better efficiency.
+ * Uses migrate_pages() kernel API to migrate pages from PMEM to DRAM one by one.
  */
 static void scan_promote_list(unsigned long nr_to_scan,
 				struct lruvec *lruvec,
@@ -583,22 +564,13 @@ static void scan_promote_list(unsigned long nr_to_scan,
 	unsigned long nr_migrated = 0;
 	isolate_mode_t isolate_mode = 0;
 	LIST_HEAD(l_hold);
-	LIST_HEAD(l_failed);  /* folios that failed migration or aren't file-backed */
 	int file = is_file_lru(lru);
-  printk(KERN_INFO "sudarshan: file = %d (lru = %d)\n", file, lru);
-
 	int nid = pgdat->node_id;
-	int i;
-
-	/* Bulk migration vectors (from move_one_page_numa_5_14.c pattern) */
-	struct page *migrate_vec[BATCH_N];
-	struct folio *folio_vec[BATCH_N];  /* Track corresponding folios for putback */
-	int vec_count = 0;
 
 	struct list_head *src = &lruvec->lists[lru];
 
 	if (list_empty(src))
-		// pr_debug("promote list empty");
+		return;
 
 	//pr_debug("scanning promote list");
 
@@ -621,107 +593,49 @@ static void scan_promote_list(unsigned long nr_to_scan,
 	// pr_debug("pgdat %d scanned %lu on promote list", nid, nr_scanned);
 	// pr_debug("pgdat %d taken %lu on promote list", nid, nr_taken);
 
-	/* ADDED: Track access patterns for each folio in promote list */
-	// DISABLED: Too much console output
-	// if (!list_empty(&l_hold)) {
-	// 	struct folio *folio, *next;
-	// 	
-	// 	list_for_each_entry_safe(folio, next, &l_hold, lru) {
-	// 		/* Track access pattern for debugging/monitoring */
-	// 		track_folio_access(folio, pgdat, "PROMOTE_LIST");
-	// 	}
-	// }
-
 	/*
-	 * BULK MIGRATION: Promote pages from PMEM to DRAM
-	 * 
-	 * Following the pattern from move_one_page_numa_5_14.c:
-	 * - Build vectors of file-backed pages
-	 * - Call uts_migrate_file_pages_bulk_vec() in batches
-	 * - Handle failures by putting pages back
+	 * MIGRATION: Promote pages from PMEM to DRAM one by one
+	 * Using migrate_pages() with alloc_normal_page (allocates on DRAM)
 	 */
 	if (nr_taken > 0) {
 		struct folio *folio, *next;
-		int target_node = NODE_DRAM;  /* Promote to DRAM */
+		int attempted = 0;
 
 		list_for_each_entry_safe(folio, next, &l_hold, lru) {
-			struct page *page = &folio->page;
+			LIST_HEAD(single_folio_list);
+			unsigned int nr_succeeded = 0;
+			int ret;
 
-			/* Only migrate file-backed pages via bulk API */
+			/* Only migrate file-backed pages */
 			if (!is_file_folio(folio)) {
-				/* Move non-file folios to failed list for putback */
-				list_move(&folio->lru, &l_failed);
 				atomic64_inc(&pages_promote_failed);
 				continue;
 			}
 
-			/* Pin the page for migration (like move_one_page_numa_5_14.c) */
-			get_page(page);
+			attempted++;
+			atomic64_inc(&mig_attempted_promote);
 
-			migrate_vec[vec_count] = page;
-			folio_vec[vec_count] = folio;
-			vec_count++;
-
-			/* Remove from l_hold - will be handled by bulk migration */
+			/* Move folio to temporary single-item list for migration */
 			list_del_init(&folio->lru);
+			list_add(&folio->lru, &single_folio_list);
 
-			/* Process batch when full (BATCH_N = 32) */
-			if (vec_count >= BATCH_N) {
-				int ret;
+			/* Migrate this single folio using kernel's migrate_pages() */
+			ret = migrate_pages(&single_folio_list, alloc_normal_page, NULL,
+					    0, MIGRATE_SYNC, MR_NUMA_MISPLACED,
+					    &nr_succeeded);
 
-				atomic64_add(vec_count, &mig_attempted_promote);
-				ret = uts_migrate_file_pages_bulk_vec(migrate_vec, vec_count, target_node);
-
-				/*
-				 * For any entry still non-NULL, bulk did NOT isolate it,
-				 * so it did NOT consume the pin -> we must drop it.
-				 * (Same logic as move_one_page_numa_5_14.c)
-				 */
-				for (i = 0; i < vec_count; i++) {
-					if (migrate_vec[i]) {
-						/* Migration failed for this page */
-						put_page(migrate_vec[i]);
-						/* Add back to failed list for LRU putback */
-						list_add(&folio_vec[i]->lru, &l_failed);
-						atomic64_inc(&pages_promote_failed);
-					} else {
-						/* Successfully migrated */
-						nr_migrated++;
-						atomic64_inc(&pages_promote_to_dram);
-					}
+			if (nr_succeeded > 0) {
+				/* Success! Page was migrated to DRAM */
+				nr_migrated++;
+				atomic64_inc(&mig_succeeded_promote);
+				atomic64_inc(&pages_promote_to_dram);
+			} else {
+				/* Failed - put folio back to l_hold for LRU putback */
+				if (!list_empty(&single_folio_list)) {
+					list_splice_init(&single_folio_list, &l_hold);
 				}
-
-				if (ret >= 0)
-					atomic64_add((u64)(vec_count - ret), &mig_succeeded_promote);
-
-				pr_info("ktmm: promote bulk dst=%d n=%d ret=%d\n", target_node, vec_count, ret);
-
-				vec_count = 0;
+				atomic64_inc(&pages_promote_failed);
 			}
-		}
-
-		/* Process remaining pages in the vector */
-		if (vec_count > 0) {
-			int ret;
-
-			atomic64_add(vec_count, &mig_attempted_promote);
-			ret = uts_migrate_file_pages_bulk_vec(migrate_vec, vec_count, target_node);
-
-			for (i = 0; i < vec_count; i++) {
-				if (migrate_vec[i]) {
-					put_page(migrate_vec[i]);
-					list_add(&folio_vec[i]->lru, &l_failed);
-					atomic64_inc(&pages_promote_failed);
-				} else {
-					nr_migrated++;
-					atomic64_inc(&pages_promote_to_dram);
-				}
-			}
-
-			if (ret >= 0)
-				atomic64_add((u64)(vec_count - ret), &mig_succeeded_promote);
-
-			pr_info("ktmm: promote bulk dst=%d n=%d ret=%d\n", target_node, vec_count, ret);
 		}
 
 		if (nr_migrated > 0) {
@@ -731,23 +645,21 @@ static void scan_promote_list(unsigned long nr_to_scan,
 			printk(KERN_INFO "ktmm: pgdat %d PROMOTED %lu folios from PMEM to DRAM\n", nid, nr_migrated);
 		}
 
-		pr_info("ktmm: promote attempted=%llu succeeded=%llu\n",
+		pr_info("ktmm: promote attempted=%d succeeded=%lu total_attempted=%llu total_succeeded=%llu\n",
+			attempted, nr_migrated,
 			(unsigned long long)atomic64_read(&mig_attempted_promote),
 			(unsigned long long)atomic64_read(&mig_succeeded_promote));
 	}
 
-	/* Merge any remaining l_hold items into l_failed for putback */
-	list_splice_init(&l_hold, &l_failed);
-
 	spin_lock_irq(&lruvec->lru_lock);
 
-	ktmm_move_folios_to_lru(lruvec, &l_failed);
+	ktmm_move_folios_to_lru(lruvec, &l_hold);
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
 
 	spin_unlock_irq(&lruvec->lru_lock);
 
-	ktmm_cgroup_uncharge_list(&l_failed);
-	ktmm_free_unref_page_list(&l_failed);
+	ktmm_cgroup_uncharge_list(&l_hold);
+	ktmm_free_unref_page_list(&l_hold);
 }
 
 
@@ -913,8 +825,7 @@ static void scan_active_list(unsigned long nr_to_scan,
  * reclaiming here, and let direct reclaim or kswapd take care of reclaiming
  * folios when neccessary.
  *
- * Uses the bulk migration API (uts_migrate_file_pages_bulk_vec) to migrate
- * file-backed pages from DRAM to PMEM in batches for better efficiency.
+ * Uses migrate_pages() kernel API to migrate pages from DRAM to PMEM one by one.
  */
 static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 					struct lruvec *lruvec,
@@ -926,21 +837,13 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 
 	LIST_HEAD(folio_list);
 	LIST_HEAD(l_active);	/* folios to activate (for PMEM node) */
-	LIST_HEAD(l_failed);	/* folios that failed migration or aren't file-backed */
 	unsigned long nr_scanned;
 	unsigned long nr_taken = 0;
 	unsigned long nr_migrated = 0;
-	unsigned long nr_reclaimed = 0;
 	unsigned long nr_activate = 0;
 	unsigned long vm_flags;
 	bool file = is_file_lru(lru);
 	int nid = pgdat->node_id;
-	int i;
-
-	/* Bulk migration vectors (from move_one_page_numa_5_14.c pattern) */
-	struct page *migrate_vec[BATCH_N];
-	struct folio *folio_vec[BATCH_N];  /* Track corresponding folios for putback */
-	int vec_count = 0;
 
 	//pr_info("scanning inactive list");
 
@@ -961,17 +864,6 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 
 	/* Track pages scanned from inactive list */
 	atomic64_add(nr_taken, &pages_scanned_inactive);
-
-	/* ADDED: Track access patterns for each folio in inactive list */
-	// DISABLED: Too much console output
-	// if (!list_empty(&folio_list)) {
-	// 	struct folio *folio, *next;
-	// 	
-	// 	list_for_each_entry_safe(folio, next, &folio_list, lru) {
-	// 		/* Track access pattern for debugging/monitoring */
-	// 		track_folio_access(folio, pgdat, "INACTIVE_LIST");
-	// 	}
-	// }
 
 	/*
 	 * PMEM NODE: Check if inactive pages are referenced and activate them.
@@ -998,90 +890,45 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	}
 
 	/*
-	 * BULK MIGRATION: Demote pages from DRAM to PMEM
-	 * 
-	 * Following the pattern from move_one_page_numa_5_14.c:
-	 * - Build vectors of file-backed pages
-	 * - Call uts_migrate_file_pages_bulk_vec() in batches
-	 * - Handle failures by putting pages back
+	 * MIGRATION: Demote pages from DRAM to PMEM one by one
+	 * Using migrate_pages() with alloc_pmem_page (allocates on PMEM)
 	 */
 	if (pgdat->pm_node == 0 && pmem_node_id != -1) {
 		struct folio *folio, *next;
-		int target_node = pmem_node_id;  /* Demote to PMEM */
+		int attempted = 0;
 
 		list_for_each_entry_safe(folio, next, &folio_list, lru) {
-			struct page *page = &folio->page;
+			LIST_HEAD(single_folio_list);
+			unsigned int nr_succeeded = 0;
+			int ret;
 
-			/* Only migrate file-backed pages via bulk API */
+			/* Only migrate file-backed pages */
 			if (!is_file_folio(folio)) {
-				/* Move non-file folios to failed list for putback */
-				list_move(&folio->lru, &l_failed);
 				continue;
 			}
 
-			/* Pin the page for migration (like move_one_page_numa_5_14.c) */
-			get_page(page);
+			attempted++;
+			atomic64_inc(&mig_attempted_demote);
 
-			migrate_vec[vec_count] = page;
-			folio_vec[vec_count] = folio;
-			vec_count++;
-
-			/* Remove from folio_list - will be handled by bulk migration */
+			/* Move folio to temporary single-item list for migration */
 			list_del_init(&folio->lru);
+			list_add(&folio->lru, &single_folio_list);
 
-			/* Process batch when full (BATCH_N = 32) */
-			if (vec_count >= BATCH_N) {
-				int ret;
+			/* Migrate this single folio using kernel's migrate_pages() */
+			ret = migrate_pages(&single_folio_list, alloc_pmem_page, NULL,
+					    0, MIGRATE_SYNC, MR_NUMA_MISPLACED,
+					    &nr_succeeded);
 
-				atomic64_add(vec_count, &mig_attempted_demote);
-				ret = uts_migrate_file_pages_bulk_vec(migrate_vec, vec_count, target_node);
-
-				/*
-				 * For any entry still non-NULL, bulk did NOT isolate it,
-				 * so it did NOT consume the pin -> we must drop it.
-				 * (Same logic as move_one_page_numa_5_14.c)
-				 */
-				for (i = 0; i < vec_count; i++) {
-					if (migrate_vec[i]) {
-						/* Migration failed for this page */
-						put_page(migrate_vec[i]);
-						/* Add back to failed list for LRU putback */
-						list_add(&folio_vec[i]->lru, &l_failed);
-					} else {
-						/* Successfully migrated */
-						nr_migrated++;
-					}
-				}
-
-				if (ret >= 0)
-					atomic64_add((u64)(vec_count - ret), &mig_succeeded_demote);
-
-				pr_info("ktmm: demote bulk dst=%d n=%d ret=%d\n", target_node, vec_count, ret);
-
-				vec_count = 0;
-			}
-		}
-
-		/* Process remaining pages in the vector */
-		if (vec_count > 0) {
-			int ret;
-
-			atomic64_add(vec_count, &mig_attempted_demote);
-			ret = uts_migrate_file_pages_bulk_vec(migrate_vec, vec_count, target_node);
-
-			for (i = 0; i < vec_count; i++) {
-				if (migrate_vec[i]) {
-					put_page(migrate_vec[i]);
-					list_add(&folio_vec[i]->lru, &l_failed);
-				} else {
-					nr_migrated++;
+			if (nr_succeeded > 0) {
+				/* Success! Page was migrated to PMEM */
+				nr_migrated++;
+				atomic64_inc(&mig_succeeded_demote);
+			} else {
+				/* Failed - put folio back to folio_list for LRU putback */
+				if (!list_empty(&single_folio_list)) {
+					list_splice_init(&single_folio_list, &folio_list);
 				}
 			}
-
-			if (ret >= 0)
-				atomic64_add((u64)(vec_count - ret), &mig_succeeded_demote);
-
-			pr_info("ktmm: demote bulk dst=%d n=%d ret=%d\n", target_node, vec_count, ret);
 		}
 
 		if (nr_migrated > 0) {
@@ -1091,14 +938,12 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 			printk(KERN_INFO "ktmm: pgdat %d DEMOTED %lu folios from DRAM to PMEM\n", nid, nr_migrated);
 		}
 
-		pr_info("ktmm: demote attempted=%llu succeeded=%llu\n",
+		pr_info("ktmm: demote attempted=%d succeeded=%lu total_attempted=%llu total_succeeded=%llu\n",
+			attempted, nr_migrated,
 			(unsigned long long)atomic64_read(&mig_attempted_demote),
 			(unsigned long long)atomic64_read(&mig_succeeded_demote));
 	}
 
-	/* Merge any remaining folio_list items into l_failed for putback */
-	list_splice_init(&folio_list, &l_failed);
-  
 	spin_lock_irq(&lruvec->lru_lock);
 
 	/* Move activated folios to active LRU list (PMEM node only) */
@@ -1106,15 +951,15 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 		ktmm_move_folios_to_lru(lruvec, &l_active);
 	}
 
-	ktmm_move_folios_to_lru(lruvec, &l_failed);
+	ktmm_move_folios_to_lru(lruvec, &folio_list);
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
 
 	spin_unlock_irq(&lruvec->lru_lock);
 
 	ktmm_cgroup_uncharge_list(&l_active);
 	ktmm_free_unref_page_list(&l_active);
-	ktmm_cgroup_uncharge_list(&l_failed);
-	ktmm_free_unref_page_list(&l_failed);
+	ktmm_cgroup_uncharge_list(&folio_list);
+	ktmm_free_unref_page_list(&folio_list);
 
 	return nr_migrated;
 }
