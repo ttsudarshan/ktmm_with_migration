@@ -1,0 +1,77 @@
+diff --git a/include/linux/migrate.h b/include/linux/migrate.h
+index 4559862d3..a8421098b 100644
+--- a/include/linux/migrate.h
++++ b/include/linux/migrate.h
+@@ -62,6 +62,8 @@ extern int migrate_pages(struct list_head *l, new_page_t new, free_page_t free,
+ 		unsigned long private, enum migrate_mode mode, int reason,
+ 		unsigned int *ret_succeeded);
+ extern struct page *alloc_migration_target(struct page *page, unsigned long private);
++extern int uts_migrate_file_pages_bulk_vec(struct page **pages, int nr_pages, 
++		int target_nid);
+ extern bool isolate_movable_page(struct page *page, isolate_mode_t mode);
+ 
+ extern void putback_movable_pages(struct list_head *l);
+diff --git a/mm/migrate.c b/mm/migrate.c
+index 8c9c06512..331320092 100644
+--- a/mm/migrate.c
++++ b/mm/migrate.c
+@@ -1926,3 +1926,59 @@ int migrate_misplaced_folio(struct folio *folio, struct vm_area_struct *vma,
+ 	return 0;
+ }
+ #endif /* CONFIG_NUMA_BALANCING */
++
++/*
++ * uts_migrate_file_pages_bulk_vec - Migrate a vector of pages to a target node.
++ * @pages: Array of page pointers to migrate
++ * @nr_pages: Number of pages in the array
++ * @target_nid: Destination NUMA node
++ *
++ * Returns: Number of pages that FAILED to migrate (0 means total success).
++ * The 'pages' array is updated: successful slots are set to NULL.
++ * Failed pages remain in the array.
++ */
++int uts_migrate_file_pages_bulk_vec(struct page **pages, int nr_pages, int target_nid)
++{
++	LIST_HEAD(pagelist);
++	int i;
++	unsigned int nr_succeeded = 0;
++	int ret_failures = 0;
++
++	/* Build list from vector */
++	for (i = 0; i < nr_pages; i++) {
++		if (pages[i]) {
++			/* Assume caller has already isolated the pages */
++			list_add_tail(&pages[i]->lru, &pagelist);
++		}
++	}
++
++	if (list_empty(&pagelist))
++		return 0;
++
++	/* Perform migration */
++	migrate_pages(&pagelist, alloc_migration_target, NULL, 
++		      target_nid, MIGRATE_SYNC, MR_NUMA_MISPLACED, &nr_succeeded);
++
++	/* +	 * Update the vector to reflect status.
++	 * migrate_pages leaves FAILED pages on 'pagelist'.
++	 * We clear the array, then refill it only with the failures.
++	 */
++	for (i = 0; i < nr_pages; i++) 
++		pages[i] = NULL;
++
++	i = 0;
++	if (!list_empty(&pagelist)) {
++		struct page *page, *next;
++		list_for_each_entry_safe(page, next, &pagelist, lru) {
++			if (i < nr_pages) 
++				pages[i++] = page;
++			
++			/* Remove from list, caller handles putback via vector */
++			list_del_init(&page->lru);
++		}
++	}
++	ret_failures = i;
++
++	return ret_failures;
++}
++EXPORT_SYMBOL(uts_migrate_file_pages_bulk_vec);
