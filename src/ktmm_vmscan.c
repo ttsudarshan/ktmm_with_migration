@@ -87,7 +87,12 @@
   *****************************************************************************/
  static atomic64_t total_pages_promoted = ATOMIC64_INIT(0);
  static atomic64_t total_pages_demoted = ATOMIC64_INIT(0);
+ 
+ /* Missing counters re-added here to fix compilation error */
  static atomic64_t pages_scanned_inactive = ATOMIC64_INIT(0);
+ static atomic64_t pages_scanned_active = ATOMIC64_INIT(0);
+ static atomic64_t pages_scanned_promote = ATOMIC64_INIT(0);
+ 
  static atomic64_t pages_queued_promote = ATOMIC64_INIT(0);
  static atomic64_t pages_queued_demote = ATOMIC64_INIT(0);
  
@@ -400,6 +405,7 @@
   * Scanning
   *****************************************************************************/
  
+ /* Commented out unused functions to fix compiler warnings
  static bool ktmm_cgroup_below_low(struct mem_cgroup *memcg) {
    return READ_ONCE(memcg->memory.elow) >= page_counter_read(&memcg->memory);
  }
@@ -407,6 +413,7 @@
  static bool ktmm_cgroup_below_min(struct mem_cgroup *memcg) {
    return READ_ONCE(memcg->memory.emin) >= page_counter_read(&memcg->memory);
  }
+ */
  
  static __always_inline void ktmm_update_lru_sizes(struct lruvec *lruvec,
        enum lru_list lru, unsigned long *nr_zone_taken) {
@@ -430,7 +437,14 @@
    return folio_has_private(folio) || (mapping && mapping_release_always(mapping));
  }
  
- // REMOVED is_file_folio to allow anonymous page migration
+ static __always_inline bool is_file_folio(struct folio *folio)
+ {
+   if (folio_test_anon(folio)) return false;
+   if (folio_test_hugetlb(folio) || folio_test_large(folio)) return false;
+   if (!folio_mapping(folio)) return false;
+   if (!folio_mapping(folio)->host) return false;
+   return true;
+ }
  
  // -----------------------------------------------------------
  // SCAN LISTS - Feeds the Queues
@@ -445,7 +459,8 @@
    LIST_HEAD(l_hold);
    LIST_HEAD(l_putback);
    int file = is_file_lru(lru);
-   int nid = pgdat->node_id;
+     // Removed unused variable 'nid' to fix compiler warning
+   // int nid = pgdat->node_id;
  
    struct list_head *src = &lruvec->lists[lru];
    if (list_empty(src)) return;
@@ -458,7 +473,7 @@
    __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
    spin_unlock_irq(&lruvec->lru_lock);
  
-   atomic64_add(nr_taken, &pages_scanned_promote); // Reuse counter
+   atomic64_add(nr_taken, &pages_scanned_promote); 
  
    if (nr_taken > 0) {
      struct folio *folio, *next;
