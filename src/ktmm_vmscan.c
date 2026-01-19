@@ -1,5 +1,5 @@
 /* =========================
- * ktmm_vmscan.c (Fixed: Active Reference Checks for Promotion)
+ * ktmm_vmscan.c (Fixed: Explicit Software + Hardware Promotion)
  * ========================= */
 
  #include <linux/atomic.h>
@@ -426,6 +426,8 @@
  
    while (!list_empty(&l_hold)) {
      struct folio *folio;
+     bool hot = false;
+     
      cond_resched();
      folio = lru_to_folio(&l_hold);
      list_del(&folio->lru);
@@ -442,22 +444,27 @@
        }
      }
  
+     // Check both hardware and software references
+     if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) hot = true;
+     if (folio_test_referenced(folio)) hot = true;
+ 
      if (pgdat->pm_node != 0) {
-       /* Active references are caught here */
-       if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
+       if (hot) {
          folio_set_promote(folio);
          list_add(&folio->lru, &l_promote);
+         folio_clear_referenced(folio); // Consume flag
          continue;
        }
      }
  
-     if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags) != 0) {
+     if (hot) {
        if ((vm_flags & VM_EXEC) && folio_is_file_lru(folio)) {
          nr_rotated += folio_nr_pages(folio);
          list_add(&folio->lru, &l_active);
          continue;
        }
      }
+     
      folio_clear_active(folio);
      folio_set_workingset(folio);
      list_add(&folio->lru, &l_inactive);
@@ -488,7 +495,7 @@
    unsigned long nr_taken = 0;
    unsigned long nr_migrated = 0;
    unsigned long nr_promote_moved = 0;
-   unsigned long vm_flags; /* REQUIRED for checking references */
+   unsigned long vm_flags;
    bool file = is_file_lru(lru);
  
    ktmm_lru_add_drain();
@@ -504,12 +511,22 @@
      struct folio *folio, *next;
      list_for_each_entry_safe(folio, next, &folio_list, lru) {
        
-       /* !! ACTIVE CHECK !! */
-       /* On PMEM, force an rmap walk to find hardware-accessed pages */
+       /* !! ROBUST PROMOTION CHECK !! */
        if (pgdat->pm_node != 0) {
-         if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
+         bool hot = false;
+         
+         // 1. Check Hardware PTEs
+         if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags))
+           hot = true;
+         
+         // 2. Check Software Flag (for read/write syscalls)
+         if (folio_test_referenced(folio))
+           hot = true;
+ 
+         if (hot) {
            folio_set_promote(folio);
            list_move(&folio->lru, &l_promote);
+           folio_clear_referenced(folio); // Consume the flag
            continue;
          }
        } 
