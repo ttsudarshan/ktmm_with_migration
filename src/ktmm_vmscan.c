@@ -3,8 +3,9 @@
  *
  *  Page scanning and related functions.
  *
- *  FIXED: Added kprobe-based hotness tracking for proactive promotion
- *  similar to move_one_page_numa_5_14.c to achieve ~1:1 promotion/demotion ratio.
+ *  FIXED: Uses module-local hashtable for hotness tracking instead of
+ *  relying on page_ext modifications. This is self-contained and doesn't
+ *  require kernel patches.
  */
 
 //#define pr_fmt(fmt) "[ KTMM Mod ] vmscan - " fmt
@@ -18,7 +19,7 @@
 #include <linux/freezer.h>
 #include <linux/fs.h>
 #include <linux/gfp.h>
-#include <linux/hashtable.h> //***
+#include <linux/hashtable.h>
 #include <linux/kernel.h>
 #include <linux/kprobes.h>
 #include <linux/kthread.h>
@@ -79,8 +80,98 @@ wait_queue_head_t tmemd_wait[MAX_NUMNODES];
 #define WORK_SLEEP_MS 10      /* Worker sleep interval when queue is empty */
 #define HIGHEST_LEVEL 7       /* Hotness threshold for promotion */
 
-/* Aging offset for slot-based hotness tracking */
-static atomic64_t aging_offset = ATOMIC64_INIT(0);
+/*****************************************************************************
+ * Module-local Hashtable for Page Hotness Tracking
+ *
+ * Since we can't modify page_ext in kernel 6.1 without kernel patches,
+ * we use a module-local hashtable to track page access counts.
+ *****************************************************************************/
+#define PAGE_HOTNESS_BITS 14  /* 16384 buckets */
+static DEFINE_HASHTABLE(page_hotness_table, PAGE_HOTNESS_BITS);
+static DEFINE_SPINLOCK(hotness_table_lock);
+
+/**
+ * struct page_hotness_entry - tracks hotness for a single page
+ * @hnode: hash table node
+ * @pfn: page frame number (unique identifier)
+ * @access_count: number of times this page was accessed
+ * @in_promote_queue: flag to prevent duplicate queue entries
+ */
+struct page_hotness_entry {
+	struct hlist_node hnode;
+	unsigned long pfn;
+	atomic_t access_count;
+	bool in_promote_queue;
+};
+
+/**
+ * get_or_create_hotness_entry - find or create a hotness entry for a page
+ * @pfn: page frame number
+ *
+ * Returns the hotness entry for this page, creating one if it doesn't exist.
+ * Caller must hold hotness_table_lock.
+ */
+static struct page_hotness_entry *get_or_create_hotness_entry(unsigned long pfn)
+{
+	struct page_hotness_entry *entry;
+
+	/* Search for existing entry */
+	hash_for_each_possible(page_hotness_table, entry, hnode, pfn) {
+		if (entry->pfn == pfn)
+			return entry;
+	}
+
+	/* Create new entry */
+	entry = kmalloc(sizeof(*entry), GFP_ATOMIC);
+	if (!entry)
+		return NULL;
+
+	entry->pfn = pfn;
+	atomic_set(&entry->access_count, 0);
+	entry->in_promote_queue = false;
+	hash_add(page_hotness_table, &entry->hnode, pfn);
+
+	return entry;
+}
+
+/**
+ * find_hotness_entry - find a hotness entry for a page
+ * @pfn: page frame number
+ *
+ * Returns the hotness entry for this page, or NULL if not found.
+ * Caller must hold hotness_table_lock.
+ */
+static struct page_hotness_entry *find_hotness_entry(unsigned long pfn)
+{
+	struct page_hotness_entry *entry;
+
+	hash_for_each_possible(page_hotness_table, entry, hnode, pfn) {
+		if (entry->pfn == pfn)
+			return entry;
+	}
+	return NULL;
+}
+
+/**
+ * clear_hotness_table - free all entries in the hotness table
+ *
+ * Called during module cleanup.
+ */
+static void clear_hotness_table(void)
+{
+	struct page_hotness_entry *entry;
+	struct hlist_node *tmp;
+	unsigned long flags;
+	int bkt;
+
+	spin_lock_irqsave(&hotness_table_lock, flags);
+	hash_for_each_safe(page_hotness_table, bkt, tmp, entry, hnode) {
+		hash_del(&entry->hnode);
+		kfree(entry);
+	}
+	spin_unlock_irqrestore(&hotness_table_lock, flags);
+}
+
 
 /**
  * is_file_folio - check if a folio is suitable for migration
@@ -261,24 +352,12 @@ static void page_stats_timer_callback(struct timer_list *t)
 
 
 /*****************************************************************************
- * Kprobe-based Hotness Tracking (from move_one_page_numa_5_14.c)
+ * Kprobe-based Hotness Tracking (self-contained with hashtable)
  *
  * This is the KEY to achieving 1:1 ratio - we intercept EVERY page access
  * and proactively queue hot pages for promotion, rather than waiting for
  * slow LRU list scanning.
  *****************************************************************************/
-
-static __always_inline u64 now_off(void)
-{
-	return (u64)atomic64_read(&aging_offset);
-}
-
-static __always_inline u64 clamp_u64(u64 v, u64 lo, u64 hi)
-{
-	if (v < lo) return lo;
-	if (v > hi) return hi;
-	return v;
-}
 
 /**
  * queue_page_for_promote_kprobe - add a page to the promotion queue (from kprobe)
@@ -318,7 +397,7 @@ static int queue_page_for_promote_kprobe(struct page *page)
  * @regs: CPU registers at probe point
  *
  * This function intercepts every call to folio_mark_accessed (or mark_page_accessed)
- * and implements slot-based hotness tracking. When a page on PMEM reaches
+ * and implements hashtable-based hotness tracking. When a page on PMEM reaches
  * HIGHEST_LEVEL hotness, it is queued for promotion to DRAM.
  *
  * This is the KEY mechanism from move_one_page_numa_5_14.c that enables
@@ -328,8 +407,10 @@ static int kp_folio_accessed_pre(struct kprobe *p, struct pt_regs *regs)
 {
 	struct folio *folio;
 	struct page *page;
-	struct page_ext *pe;
-	u64 off, slot, new_slot, eff;
+	struct page_hotness_entry *entry;
+	unsigned long pfn;
+	unsigned long flags;
+	int access_count;
 	int nid;
 
 	atomic64_inc(&kprobe_hits);
@@ -361,48 +442,52 @@ static int kp_folio_accessed_pre(struct kprobe *p, struct pt_regs *regs)
 
 	atomic64_inc(&kprobe_pmem_pages);
 
+	/* Get PFN for hashtable lookup */
+	pfn = page_to_pfn(page);
+
 	/*
-	 * Get page_ext for hotness tracking
-	 * page_ext stores our uts_slot_id for tracking access frequency
+	 * Hashtable-based hotness tracking:
+	 * - Each access increments the access_count
+	 * - When count reaches HIGHEST_LEVEL, page is hot
 	 */
-	pe = lookup_page_ext(page);
-	if (!pe)
+	spin_lock_irqsave(&hotness_table_lock, flags);
+
+	entry = get_or_create_hotness_entry(pfn);
+	if (!entry) {
+		spin_unlock_irqrestore(&hotness_table_lock, flags);
 		return 0;
+	}
 
-	/*
-	 * Slot-based aging algorithm (from move_one_page_numa_5_14.c):
-	 * - Each access increments the slot value
-	 * - Slot is clamped to [aging_offset+1, aging_offset+HIGHEST_LEVEL]
-	 * - When effective level (slot - offset) reaches HIGHEST_LEVEL, page is hot
-	 */
-	off = now_off();
-	slot = READ_ONCE(pe->uts_slot_id);
-	new_slot = clamp_u64(slot + 1, off + 1, off + HIGHEST_LEVEL);
-	WRITE_ONCE(pe->uts_slot_id, new_slot);
+	/* Increment access count */
+	access_count = atomic_inc_return(&entry->access_count);
 
-	/* Calculate effective hotness level */
-	eff = (new_slot > off) ? (new_slot - off) : 0;
+	/* Check if already in promote queue */
+	if (entry->in_promote_queue) {
+		spin_unlock_irqrestore(&hotness_table_lock, flags);
+		return 0;
+	}
 
 	/* Not hot enough yet */
-	if (eff < HIGHEST_LEVEL)
+	if (access_count < HIGHEST_LEVEL) {
+		spin_unlock_irqrestore(&hotness_table_lock, flags);
 		return 0;
+	}
+
+	/* Mark as in promote queue to prevent duplicates */
+	entry->in_promote_queue = true;
+
+	spin_unlock_irqrestore(&hotness_table_lock, flags);
 
 	atomic64_inc(&kprobe_hot_detected);
-
-	/*
-	 * Check if page is already in promote queue using the promote flag
-	 * This prevents duplicate entries
-	 */
-	if (uts_page_in_promote(page))
-		return 0;
-
-	/* Mark page as being in promote queue */
-	uts_page_set_in_promote(page, true);
 
 	/* Queue the page for bulk promotion */
 	if (queue_page_for_promote_kprobe(page) != 0) {
 		/* Failed to queue, clear the flag */
-		uts_page_set_in_promote(page, false);
+		spin_lock_irqsave(&hotness_table_lock, flags);
+		entry = find_hotness_entry(pfn);
+		if (entry)
+			entry->in_promote_queue = false;
+		spin_unlock_irqrestore(&hotness_table_lock, flags);
 	}
 
 	return 0;
@@ -586,23 +671,14 @@ static int ktmm_folio_referenced(struct folio *folio, int is_locked,
 static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, const char *location)
 {
     int was_accessed;
-    const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
     
     /* Check the referenced flag */
     was_accessed = folio_test_referenced(folio);
     
     if (was_accessed) {
-        /* Print the access information */
-        // printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, jiffies=%lu) ***\n", 
-        //          location, folio, node_type, jiffies);
-        
         /* Immediately clear the bit after printing so we don't print it again in the same scan */
         folio_clear_referenced(folio);  /* DISABLED: Not clearing reference bit */
-    } 
-    //else {
-    //     printk(KERN_INFO "Not accessed at %s: referenced_bit=0 (folio=%p, node=%s, jiffies=%lu)\n", 
-    //              location, folio, node_type, jiffies);
-    // }
+    }
     
     return was_accessed;
 }
@@ -683,6 +759,27 @@ static struct page *ktmm_alloc_pages(gfp_t gfp_mask, unsigned int order, int pre
  *****************************************************************************/
 
 /**
+ * clear_hotness_entry_for_page - clear hotness entry after migration
+ * @page: the page that was migrated
+ *
+ * Called after successful migration to reset the hotness tracking.
+ */
+static void clear_hotness_entry_for_page(struct page *page)
+{
+	unsigned long pfn = page_to_pfn(page);
+	struct page_hotness_entry *entry;
+	unsigned long flags;
+
+	spin_lock_irqsave(&hotness_table_lock, flags);
+	entry = find_hotness_entry(pfn);
+	if (entry) {
+		entry->in_promote_queue = false;
+		atomic_set(&entry->access_count, 0);
+	}
+	spin_unlock_irqrestore(&hotness_table_lock, flags);
+}
+
+/**
  * promote_worker_fn - worker thread for bulk promotion (PMEM -> DRAM)
  * @arg: unused
  *
@@ -723,10 +820,6 @@ static int promote_worker_fn(void *arg)
 		for (i = 0; i < n; i++) {
 			struct migrate_node *x = batch[i];
 			struct folio *folio = x->folio;
-			struct page *page = &folio->page;
-
-			/* Clear the in-promote flag now that we're processing */
-			uts_page_set_in_promote(page, false);
 
 			/* Add folio to migration list */
 			list_add_tail(&folio->lru, &migrate_list);
@@ -756,7 +849,13 @@ static int promote_worker_fn(void *arg)
 			int failed = 0;
 
 			list_for_each_entry_safe(folio, next, &migrate_list, lru) {
+				struct page *page = &folio->page;
+
 				list_del_init(&folio->lru);
+
+				/* Clear the in_promote_queue flag so it can be re-queued */
+				clear_hotness_entry_for_page(page);
+
 				folio_put(folio);  /* Drop our reference */
 				failed++;
 			}
@@ -1016,7 +1115,6 @@ static void scan_promote_list(unsigned long nr_to_scan,
 	isolate_mode_t isolate_mode = 0;
 	LIST_HEAD(l_hold);
 	int file = is_file_lru(lru);
-	int nid = pgdat->node_id;
 
 	struct list_head *src = &lruvec->lists[lru];
 
@@ -1040,9 +1138,6 @@ static void scan_promote_list(unsigned long nr_to_scan,
 
 	/* Track pages scanned from promote list */
 	atomic64_add(nr_taken, &pages_scanned_promote);
-
-	// pr_debug("pgdat %d scanned %lu on promote list", nid, nr_scanned);
-	// pr_debug("pgdat %d taken %lu on promote list", nid, nr_taken);
 
 	/*
 	 * With kprobe-based promotion, pages in the promote list are
@@ -1093,7 +1188,6 @@ static void scan_active_list(unsigned long nr_to_scan,
 	unsigned nr_deactivate, nr_activate, nr_promote;
 	unsigned nr_rotated = 0;
 	int file = is_file_lru(lru);
-	int nid = pgdat->node_id;
 	
 	//pr_info("scanning active list");
 
@@ -1190,10 +1284,6 @@ static void scan_active_list(unsigned long nr_to_scan,
 	nr_activate = ktmm_move_folios_to_lru(lruvec, &l_active);
 	nr_deactivate = ktmm_move_folios_to_lru(lruvec, &l_inactive);
 	nr_promote = ktmm_move_folios_to_lru(lruvec, &l_promote);
-
-	// pr_debug("pgdat %d folio activated: %d", nid, nr_activate);
-	// pr_debug("pgdat %d folio deactivated: %d", nid, nr_deactivate);
-	// pr_debug("pgdat %d folio promoted: %d", nid, nr_promote);
 
 	// Keep all free folios in l_active list
 	list_splice(&l_inactive, &l_active);
@@ -1608,8 +1698,8 @@ static void drain_migration_queues(void)
 
 		spin_unlock_irqrestore(&promote_queue_lock, flags);
 
-		/* Clear in-promote flag */
-		uts_page_set_in_promote(&n->folio->page, false);
+		/* Clear hotness entry */
+		clear_hotness_entry_for_page(&n->folio->page);
 		folio_put(n->folio);
 		kfree(n);
 	}
@@ -1750,6 +1840,9 @@ void tmemd_stop_all(void)
 
 	/* Drain any remaining items in migration queues */
 	drain_migration_queues();
+
+	/* Clear the hotness tracking hashtable */
+	clear_hotness_table();
 
 	/* Print final stats before stopping */
 	printk(KERN_INFO "*** KTMM FINAL STATS: Total Promoted: %llu, Total Demoted: %llu ***\n",
