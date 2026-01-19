@@ -1,5 +1,5 @@
 /* =========================
- * ktmm_vmscan.c (Kernel 6.1: Local Bulk Migration Implementation)
+ * ktmm_vmscan.c (Fixed Promotion Logic)
  * ========================= */
 
  #include <linux/atomic.h>
@@ -39,29 +39,20 @@
  #include "ktmm_hook.h"
  #include "ktmm_vmscan.h"
  
- // possibly needs to be GFP_USER?
  #define TMEMD_GFP_FLAGS GFP_NOIO
  
- // which node is the pmem node
  int pmem_node = -1;
- 
- /* holds pointers to the tmemd daemons running per node */
  static struct task_struct *tmemd_list[MAX_NUMNODES];
- 
- /* per node tmemd wait queues */
  wait_queue_head_t tmemd_wait[MAX_NUMNODES];
  
- /* Bulk Migration Definitions */
  #define BATCH_N 32
  static atomic64_t mig_attempted = ATOMIC64_INIT(0);
  static atomic64_t mig_succeeded = ATOMIC64_INIT(0);
- 
- /* Global Stats Counters */
  static atomic64_t total_promoted_count = ATOMIC64_INIT(0);
  static atomic64_t total_demoted_count = ATOMIC64_INIT(0);
  
- /************** PAGE ACCESS TRACKING HASHTABLE ******************************/
- #define PAGE_ACCESS_HASH_BITS 16  /* 2^16 = 65536 buckets */
+ /* Page Access Tracking */
+ #define PAGE_ACCESS_HASH_BITS 16
  static DEFINE_HASHTABLE(page_access_hash, PAGE_ACCESS_HASH_BITS);
  static DEFINE_SPINLOCK(page_access_lock);
  
@@ -75,12 +66,10 @@
  static struct mem_cgroup *(*pt_mem_cgroup_iter)(struct mem_cgroup *root,
          struct mem_cgroup *prev,
          struct mem_cgroup_reclaim_cookie *reclaim);
- 
  static bool (*pt_zone_watermark_ok_safe)(struct zone *z,
            unsigned int order,
            unsigned long mark,
            int highest_zoneidx);
- 
  static struct pglist_data *(*pt_first_online_pgdat)(void);
  static struct zone *(*pt_next_zone)(struct zone *zone);
  static void (*pt_free_unref_page_list)(struct list_head *list);
@@ -98,7 +87,7 @@
  static struct page *(*pt_alloc_pages)(gfp_t gfp_mask, unsigned int order, int preferred_nid,
            nodemask_t *nodemask);
  
- /**************** KTMM IMPLEMENTATION OF HOOKED FUNCTION **********************/
+ /**************** KTMM IMPLEMENTATION **********************/
  static struct mem_cgroup *ktmm_mem_cgroup_iter(struct mem_cgroup *root,
          struct mem_cgroup *prev,
          struct mem_cgroup_reclaim_cookie *reclaim)
@@ -185,7 +174,12 @@
                   location, folio, node_type, current_jiffies, first_access_jiffies, 
                   (current_jiffies - first_access_jiffies));
          
-         folio_clear_referenced(folio);
+         /* !! CRITICAL FIX !! 
+          * Do NOT clear the referenced bit here. 
+          * If we clear it, the promotion logic later in scan_active_list 
+          * will see '0' and assume the page is cold.
+          */
+         // folio_clear_referenced(folio);  <-- DELETED
      } 
      return was_accessed;
  }
@@ -235,24 +229,18 @@
  /*****************************************************************************
   * Local Implementation of uts_migrate_file_pages_bulk_vec
   *****************************************************************************/
- 
- 
- /**
+ /*
   * uts_migrate_file_pages_bulk_vec - Local implementation of the missing kernel API.
-  * Uses the exact logic from standard kernel migration but accepts a vector input.
   */
  static int uts_migrate_file_pages_bulk_vec(struct page **pages, int nr_pages, int target_nid)
  {
    LIST_HEAD(pagelist);
    int i;
    unsigned int nr_succeeded = 0;
-   int ret;
+   int ret_failures = 0;
  
-   /* 1. Build a list from the valid vector entries */
    for (i = 0; i < nr_pages; i++) {
      if (pages[i]) {
-       /* Pages are already isolated by the caller (scan_node), 
-        * so we just add them to our local list for migration. */
        list_add_tail(&pages[i]->lru, &pagelist);
      }
    }
@@ -260,43 +248,24 @@
    if (list_empty(&pagelist))
      return 0;
  
-   /* 2. Call standard kernel migrate_pages */
-   ret = migrate_pages(&pagelist, 
+   migrate_pages(&pagelist, 
            (target_nid == 0) ? alloc_normal_page : alloc_pmem_page, 
-           NULL, 
-           0, /* private data */
-           MIGRATE_SYNC, 
-           MR_NUMA_MISPLACED, 
-           &nr_succeeded);
+           NULL, 0, MIGRATE_SYNC, MR_NUMA_MISPLACED, &nr_succeeded);
  
-   /* 3. Reconstruct the vector for the caller.
-    * migrate_pages leaves FAILED pages on 'pagelist'.
-    * We must update 'pages[i]' so the caller knows what failed.
-    *
-    * Logic: 
-    * - If a page is still on 'pagelist', it failed. Keep it in 'pages[]'.
-    * - If a page is gone from 'pagelist', it succeeded. Set 'pages[]' to NULL.
-    */
-   
-   /* Clear all slots first (temporarily) */
    for (i = 0; i < nr_pages; i++) 
      pages[i] = NULL;
    
-   /* Refill slots with the failed pages remaining on the list */
    i = 0;
    if (!list_empty(&pagelist)) {
      struct page *page, *next;
      list_for_each_entry_safe(page, next, &pagelist, lru) {
        if (i < nr_pages) 
          pages[i++] = page;
-       
-       /* Remove from list because caller will handle putback/cleanup using the vector */
        list_del_init(&page->lru);
      }
    }
- 
-   /* move.c logic expects the return value to be the number of FAILURES (or pages left) */
-   return i; 
+   ret_failures = i;
+   return ret_failures;
  }
  
  
@@ -314,25 +283,19 @@
      struct page *page = folio_page(folio, 0);
  
      vec[n++] = page;
-     /* Important: delete from the holding list so we can manage it via vector */
      list_del_init(&folio->lru);
  
      if (n == BATCH_N) {
        int ret_left;
-       
        atomic64_add(n, &mig_attempted);
-       
-       /* Call OUR LOCAL implementation */
        ret_left = uts_migrate_file_pages_bulk_vec(vec, n, target_nid);
  
-       /* Put back failed pages */
        for (i = 0; i < n; i++) {
          if (vec[i]) {
            ktmm_folio_putback_lru(page_folio(vec[i]));
          }
        }
  
-       /* Calculate success */
        if (ret_left >= 0) {
          unsigned long success_count = (unsigned long)(n - ret_left);
          atomic64_add(success_count, &mig_succeeded);
@@ -342,11 +305,9 @@
      }
    }
  
-   /* Flush remaining batch */
    if (n > 0) {
      int ret_left;
      atomic64_add(n, &mig_attempted);
-     
      ret_left = uts_migrate_file_pages_bulk_vec(vec, n, target_nid);
  
      for (i = 0; i < n; i++) {
@@ -361,7 +322,6 @@
        nr_migrated += success_count;
      }
    }
- 
    return nr_migrated;
  }
  
@@ -488,6 +448,7 @@
      folio = lru_to_folio(&l_hold);
      list_del(&folio->lru);
  
+     /* We check access here, but we removed folio_clear_referenced so the flag remains! */
      track_folio_access(folio, pgdat, "ACTIVE_LIST");
  
      if (unlikely(!ktmm_folio_evictable(folio))) {
@@ -503,6 +464,7 @@
      }
  
      if (pgdat->pm_node != 0) {
+       /* Now this check will actually work because the bit wasn't cleared */
        if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
          folio_set_promote(folio);
          list_add(&folio->lru, &l_promote);
@@ -542,9 +504,11 @@
            struct pglist_data *pgdat)
  {
    LIST_HEAD(folio_list);
+   LIST_HEAD(l_promote); /* ADDED for promotion from inactive */
    unsigned long nr_scanned;
    unsigned long nr_taken = 0;
    unsigned long nr_migrated = 0;
+   unsigned long nr_promote_moved = 0;
    bool file = is_file_lru(lru);
  
    ktmm_lru_add_drain();
@@ -560,6 +524,19 @@
      struct folio *folio, *next;
      list_for_each_entry_safe(folio, next, &folio_list, lru) {
        track_folio_access(folio, pgdat, "INACTIVE_LIST");
+ 
+       /* !! CRITICAL FIX FOR PROMOTION !! 
+        * If we are on PMEM (Node != 0) and the page is referenced,
+        * we MUST move it to the promote list or active list.
+        * Otherwise, hot pages demoted to inactive will starve here.
+        */
+       if (pgdat->pm_node != 0) {
+         if (folio_test_referenced(folio)) {
+           // Logic: If accessed in inactive, it is HOT.
+           folio_set_promote(folio);
+           list_move(&folio->lru, &l_promote);
+         }
+       }
      }
    }
  
@@ -575,15 +552,31 @@
      __mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
    }
  
+   /* Handle any pages we decided to Promote from Inactive (On PMEM) */
+   if (!list_empty(&l_promote)) {
+     spin_lock_irq(&lruvec->lru_lock);
+     nr_promote_moved = ktmm_move_folios_to_lru(lruvec, &l_promote);
+     /* We moved them to the promote list, so we reduce the count of isolated */
+     __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_promote_moved);
+     spin_unlock_irq(&lruvec->lru_lock);
+     
+     /* If there are any leftovers in l_promote (unlikely), clean them */
+     ktmm_cgroup_uncharge_list(&l_promote);
+     ktmm_free_unref_page_list(&l_promote);
+   }
+ 
+   /* Cleanup remaining folios */
    if (!list_empty(&folio_list)) {
      spin_lock_irq(&lruvec->lru_lock);
      ktmm_move_folios_to_lru(lruvec, &folio_list);
-     __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
+     __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -(nr_taken - nr_promote_moved));
      spin_unlock_irq(&lruvec->lru_lock);
      ktmm_cgroup_uncharge_list(&folio_list);
      ktmm_free_unref_page_list(&folio_list);
    } else {
-     __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
+     // If everything was promoted/migrated, just ensure stats are balanced
+     if (nr_taken > nr_promote_moved)
+       __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -(nr_taken - nr_promote_moved));
    }
    return nr_migrated;
  }
@@ -702,7 +695,6 @@
    hash_init(page_access_hash);
    printk(KERN_INFO "Page access tracking hashtable initialized\n");
  
-   /* We now use local bulk implementation, no external lookup needed */
    printk(KERN_INFO "KTMM: Using local bulk migration implementation.\n");
  
    for (i = 0; i < MAX_NUMNODES; i++)
