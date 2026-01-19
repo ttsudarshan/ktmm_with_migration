@@ -45,6 +45,7 @@
 #include <linux/sched.h>
 #include <linux/spinlock.h>
 #include <linux/swap.h>
+#include <linux/vmalloc.h>
 #include <linux/vmstat.h>
 #include <linux/wait.h>
 #include <linux/jiffies.h>
