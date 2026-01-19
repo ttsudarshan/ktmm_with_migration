@@ -1,1629 +1,897 @@
-I've integrated the bulk migration logic from the 5.14 code into your 6.1 kernel module.
-
-Here is the modified `ktmm_vmscan.c`. I made the following key adaptations to ensure it works with the Kernel 6.1 API (specifically the `folio` changes):
-
-1. **Added Queues & Workers:** I brought over the `promote_queue`, `demote_queue`, and the worker threads (`promote_worker_fn`, `demote_worker_fn`).
-2. **Folio Adaptation:** The worker threads and queue structures now use `struct folio *` instead of `struct page *`, which aligns with the 6.1 hooks you were already using.
-3. **Removed Manual Migration Loops:** I stripped out the manual `ktmm_migrate_folio_manual` loops from `scan_promote_list` and `scan_inactive_list`.
-4. **Inserted Queue Hooks:** Replaced the migration loops with calls to `queue_folio_for_promote` and `queue_folio_for_demote`.
-
-```c
 /*
  * ktmm_vmscan.c
  *
  * Page scanning and related functions.
  */
 
-//#define pr_fmt(fmt) "[ KTMM Mod ] vmscan - " fmt
-
-
-#include <linux/atomic.h>
-#include <linux/bitops.h>
-#include <linux/buffer_head.h>
-#include <linux/cgroup.h>
-#include <linux/delay.h>
-#include <linux/freezer.h>
-#include <linux/fs.h>
-#include <linux/gfp.h>
-#include <linux/hashtable.h> //***
-#include <linux/kernel.h>
-#include <linux/kprobes.h>
-#include <linux/kthread.h>
-#include <linux/list.h>
-#include <linux/module.h>
-#include <linux/memcontrol.h>
-//#include <linux/mmflags.h>
-#include <linux/mmzone.h>
-#include <linux/mm_inline.h>
-#include <linux/migrate.h>
-#include <linux/migrate_mode.h>
-#include <linux/nodemask.h>
-#include <linux/numa.h>
-#include <linux/page-flags.h>
-#include <linux/page_ref.h>
-#include <linux/pagemap.h>
-#include <linux/pagevec.h>
-#include <linux/printk.h>
-#include <linux/rmap.h>
-#include <linux/signal.h>
-#include <linux/sched.h>
-#include <linux/spinlock.h>
-#include <linux/swap.h>
-#include <linux/vmstat.h>
-#include <linux/wait.h>
-#include <linux/jiffies.h>
-#include <linux/timer.h>
-#include "ktmm_hook.h"
-#include "ktmm_vmscan.h"
-
-// possibly needs to be GFP_USER?
-#define TMEMD_GFP_FLAGS GFP_NOIO
-
-// which node is the pmem node
-int pmem_node = -1;
-
-/* holds pointers to the tmemd daemons running per node */
-static struct task_struct *tmemd_list[MAX_NUMNODES];
-
-
-/* per node tmemd wait queues */
-wait_queue_head_t tmemd_wait[MAX_NUMNODES];
-
-/*****************************************************************************
- * Bulk Migration Configuration
- *****************************************************************************/
-#define BATCH_N 32            /* Maximum batch size for bulk migration */
-#define WORK_SLEEP_MS 10      /* Worker sleep interval when queue is empty */
-
-/*****************************************************************************
- * Bulk Migration Queue Structures
- *****************************************************************************/
-
-/**
- * struct migrate_node - node structure for migration queues
- * @link: list linkage
- * @folio: pointer to the folio to migrate
- *
- * Used to queue folios for bulk migration by worker threads.
- */
-struct migrate_node {
-	struct list_head link;
-	struct folio *folio;
-};
-
-/* Promotion queue: PMEM -> DRAM (hot pages) */
-static LIST_HEAD(promote_queue);
-static DEFINE_SPINLOCK(promote_queue_lock);
-static atomic_t promote_queue_count = ATOMIC_INIT(0);
-
-/* Demotion queue: DRAM -> PMEM (cold pages) */
-static LIST_HEAD(demote_queue);
-static DEFINE_SPINLOCK(demote_queue_lock);
-static atomic_t demote_queue_count = ATOMIC_INIT(0);
-
-/* Worker threads for bulk migration */
-static struct task_struct *promote_worker_task;
-static struct task_struct *demote_worker_task;
-
-
-/*****************************************************************************
- * Promotion/Demotion Page Counters
- *****************************************************************************/
-
-/* Atomic counters for tracking total promoted and demoted pages */
-static atomic64_t total_pages_promoted = ATOMIC64_INIT(0);
-static atomic64_t total_pages_demoted = ATOMIC64_INIT(0);
-
-/* Bulk migration statistics */
-static atomic64_t mig_attempted_promote = ATOMIC64_INIT(0);
-static atomic64_t mig_succeeded_promote = ATOMIC64_INIT(0);
-static atomic64_t mig_attempted_demote = ATOMIC64_INIT(0);
-static atomic64_t mig_succeeded_demote = ATOMIC64_INIT(0);
-
-
-/*****************************************************************************
- * Page Flow Debug Counters
- * Track page movement: inactive -> active -> promote -> DRAM
- *****************************************************************************/
-
-/* Counters for page flow between lists */
-static atomic64_t pages_inactive_to_active = ATOMIC64_INIT(0);   /* inactive -> active (activation) */
-static atomic64_t pages_active_to_inactive = ATOMIC64_INIT(0);   /* active -> inactive (deactivation) */
-static atomic64_t pages_active_to_promote = ATOMIC64_INIT(0);    /* active -> promote list */
-static atomic64_t pages_promote_to_dram = ATOMIC64_INIT(0);      /* promote -> DRAM (successful migration) */
-static atomic64_t pages_promote_failed = ATOMIC64_INIT(0);       /* promote migration failures */
-
-/* Counters for pages scanned/taken from each list per cycle */
-static atomic64_t pages_scanned_inactive = ATOMIC64_INIT(0);
-static atomic64_t pages_scanned_active = ATOMIC64_INIT(0);
-static atomic64_t pages_scanned_promote = ATOMIC64_INIT(0);
-
-/* Counters for bulk queue operations */
-static atomic64_t pages_queued_promote = ATOMIC64_INIT(0);       /* pages added to promote queue */
-static atomic64_t pages_queued_demote = ATOMIC64_INIT(0);        /* pages added to demote queue */
-
-/* Timer for periodic printing of counters */
-static struct timer_list page_stats_timer;
-
-/**
- * page_stats_timer_callback - timer callback that prints promotion/demotion stats
- * @t: timer_list pointer
- *
- * This function is called every 5 seconds to print the total number of
- * pages promoted and demoted.
- */
-static void page_stats_timer_callback(struct timer_list *t)
-{
-	u64 promoted = atomic64_read(&total_pages_promoted);
-	u64 demoted = atomic64_read(&total_pages_demoted);
-
-	/* Page flow counters */
-	u64 inactive_to_active = atomic64_read(&pages_inactive_to_active);
-	u64 active_to_inactive = atomic64_read(&pages_active_to_inactive);
-	u64 active_to_promote = atomic64_read(&pages_active_to_promote);
-	u64 promote_to_dram = atomic64_read(&pages_promote_to_dram);
-	u64 promote_failed = atomic64_read(&pages_promote_failed);
-	u64 scanned_inactive = atomic64_read(&pages_scanned_inactive);
-	u64 scanned_active = atomic64_read(&pages_scanned_active);
-	u64 scanned_promote = atomic64_read(&pages_scanned_promote);
-
-	/* Bulk migration stats */
-	u64 promote_attempted = atomic64_read(&mig_attempted_promote);
-	u64 promote_succeeded = atomic64_read(&mig_succeeded_promote);
-	u64 demote_attempted = atomic64_read(&mig_attempted_demote);
-	u64 demote_succeeded = atomic64_read(&mig_succeeded_demote);
-
-	/* Queue stats */
-	u64 queued_promote = atomic64_read(&pages_queued_promote);
-	u64 queued_demote = atomic64_read(&pages_queued_demote);
-	int promote_q_len = atomic_read(&promote_queue_count);
-	int demote_q_len = atomic_read(&demote_queue_count);
-
-	/* Calculate ratio */
-	u64 ratio_num = 0, ratio_den = 1;
-	if (demoted > 0) {
-		ratio_num = promoted * 100;
-		ratio_den = demoted;
-	}
-
-	printk(KERN_INFO "*** KTMM PAGE STATS: Total Promoted: %llu, Total Demoted: %llu (Ratio: %llu.%02llu:1) ***\n",
-	       promoted, demoted, ratio_num / ratio_den / 100, (ratio_num / ratio_den) % 100);
-
-	/* Print page flow debug info */
-	printk(KERN_INFO "*** KTMM PAGE FLOW DEBUG ***\n");
-	printk(KERN_INFO "  Scanned: inactive=%llu, active=%llu, promote=%llu\n",
-	       scanned_inactive, scanned_active, scanned_promote);
-	printk(KERN_INFO "  Flow: inactive->active=%llu, active->inactive=%llu\n",
-	       inactive_to_active, active_to_inactive);
-	printk(KERN_INFO "  Flow: active->promote=%llu, promote->DRAM=%llu (failed=%llu)\n",
-	       active_to_promote, promote_to_dram, promote_failed);
-	printk(KERN_INFO "  Bulk Promote: attempted=%llu, succeeded=%llu (queued=%llu, pending=%d)\n",
-	       promote_attempted, promote_succeeded, queued_promote, promote_q_len);
-	printk(KERN_INFO "  Bulk Demote: attempted=%llu, succeeded=%llu (queued=%llu, pending=%d)\n",
-	       demote_attempted, demote_succeeded, queued_demote, demote_q_len);
-	printk(KERN_INFO "*** END PAGE FLOW DEBUG ***\n");
-
-	/* Re-arm the timer for another 5 seconds */
-	mod_timer(&page_stats_timer, jiffies + 5 * HZ);
-}
-
-
-/************** MISC HOOKED FUNCTION PROTOTYPES *****************************/
-static struct mem_cgroup *(*pt_mem_cgroup_iter)(struct mem_cgroup *root,
-				struct mem_cgroup *prev,
-				struct mem_cgroup_reclaim_cookie *reclaim);
-
-
-static bool (*pt_zone_watermark_ok_safe)(struct zone *z,
-					unsigned int order,
-					unsigned long mark,
-					int highest_zoneidx);
-
-
-static struct pglist_data *(*pt_first_online_pgdat)(void);
-
-
-static struct zone *(*pt_next_zone)(struct zone *zone);
-
-
-static void (*pt_free_unref_page_list)(struct list_head *list);
-
-
-static void (*pt_lru_add_drain)(void);
-
-
-static void (*pt_cgroup_update_lru_size)(struct lruvec *lruvec, enum lru_list lru,
-					int zid, int nr_pages);
-
-
-static void (*pt_cgroup_uncharge_list)(struct list_head *page_list);
-
-
-static unsigned long (*pt_isolate_lru_folios)(unsigned long nr_to_scan, struct lruvec *lruvec,
-					struct list_head *dst, unsigned long *nr_scanned,
-					struct scan_control *sc, enum lru_list lru);
-
-
-static unsigned int (*pt_move_folios_to_lru)(struct lruvec *lruvec, struct list_head *list);
-
-
-static void (*pt_folio_putback_lru)(struct folio *folio);
-
-
-static int (*pt_folio_referenced)(struct folio *folio, int is_locked,
-				struct mem_cgroup *memcg, unsigned long *vm_flags);
-
-
-/* __alloc_pages (page_alloc.c) */
-/* probably needs removed */
-static struct page *(*pt_alloc_pages)(gfp_t gfp_mask, unsigned int order, int preferred_nid,
-					nodemask_t *nodemask);
-
-
-/**************** KTMM IMPLEMENTATION OF HOOKED FUNCTION **********************/
-static struct mem_cgroup *ktmm_mem_cgroup_iter(struct mem_cgroup *root,
-				struct mem_cgroup *prev,
-				struct mem_cgroup_reclaim_cookie *reclaim)
-{
-	return pt_mem_cgroup_iter(root, prev, reclaim);
-}
-
-
-static bool ktmm_zone_watermark_ok_safe(struct zone *z,
-					unsigned int order,
-					unsigned long mark,
-					int highest_zoneidx)
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
-	return pt_zone_watermark_ok_safe(z, order, mark, highest_zoneidx);
-}
-
-
-static struct pglist_data *ktmm_first_online_pgdat(void)
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
-	return pt_first_online_pgdat();
-}
-
-
-static struct zone *ktmm_next_zone(struct zone *zone)
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
-	return pt_next_zone(zone);
-}
-
-
-static void ktmm_free_unref_page_list(struct list_head *list)
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
-	return pt_free_unref_page_list(list);
-}
-
-
-static void ktmm_lru_add_drain(void)
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
-	pt_lru_add_drain();
-}
-
-
-static void ktmm_cgroup_update_lru_size(struct lruvec *lruvec, enum lru_list lru,
-					int zid, int nr_pages)
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
-	pt_cgroup_update_lru_size(lruvec, lru, zid, nr_pages);
-}
-
-
-static void ktmm_cgroup_uncharge_list(struct list_head *page_list)
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
-	pt_cgroup_uncharge_list(page_list);
-}
-
-
-static unsigned long ktmm_isolate_lru_folios(unsigned long nr_to_scan, struct lruvec *lruvec,
-					struct list_head *dst, unsigned long *nr_scanned,
-					struct scan_control *sc, enum lru_list lru)
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
-	return pt_isolate_lru_folios(nr_to_scan, lruvec, dst, nr_scanned, sc, lru);
-}
-
-
-static unsigned int ktmm_move_folios_to_lru(struct lruvec *lruvec, struct list_head *list)
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
-	return pt_move_folios_to_lru(lruvec, list);
-}
-
-
-static void ktmm_folio_putback_lru(struct folio *folio)
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
-	pt_folio_putback_lru(folio);
-}
-
-
-static int ktmm_folio_referenced(struct folio *folio, int is_locked,
-				struct mem_cgroup *memcg, unsigned long *vm_flags)
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
-	return pt_folio_referenced(folio, is_locked, memcg, vm_flags);
-}
-
-
-/*****************************************************************************
- * Page Access Tracking Helper Functions
- *****************************************************************************/
-
-/**
- * track_folio_access - track if folio was previously accessed
- * * @folio: folio to check
- * @pgdat: node data to determine node type
- * @location: descriptive string for logging context
- * * Returns: 1 if page was previously accessed, 0 if first access
- * * This function checks the referenced bit and if it's set (accessed),
- * it prints the access information and immediately clears the bit.
- * This way, if the same folio is checked again in the same scan cycle,
- * it won't show as accessed again (avoiding duplicate logging).
- */
-static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, const char *location)
-{
-    int was_accessed;
-    const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
-    
-    /* Check the referenced flag */
-    was_accessed = folio_test_referenced(folio);
-    
-    if (was_accessed) {
-        /* Print the access information */
-        // printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, jiffies=%lu) ***\n", 
-        //          location, folio, node_type, jiffies);
-        
-        /* Immediately clear the bit after printing so we don't print it again in the same scan */
-        folio_clear_referenced(folio);  /* DISABLED: Not clearing reference bit */
-    } 
-    //else {
-    //     printk(KERN_INFO "Not accessed at %s: referenced_bit=0 (folio=%p, node=%s, jiffies=%lu)\n", 
-    //              location, folio, node_type, jiffies);
-    // }
-    
-    return was_accessed;
-}
-
-/*****************************************************************************
- * ALLOC & SWAP
- *****************************************************************************/
-
-/**
- * alloc_pmem_page - allocate a page on pmem node
- *
- * @page:	single page
- * @data:	misc data
- *
- * This is to be fed into migrate_pages() as a parameter.
- */
-struct page* alloc_pmem_page(struct  page *page, unsigned long data)
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-	gfp_t gfp_mask = GFP_USER | __GFP_PMEM;
-	return alloc_page(gfp_mask);
-}
-
-
-/**
- * alloc_normal_page - allocate a page on a normal node
- *
- * @page:	single page
- * @data:	misc data
- *
- * This is to be fed into migrate_pages() as a parameter.
- */
-struct page* alloc_normal_page(struct page *page, unsigned long data)
-{
-        gfp_t gfp_mask = GFP_USER;
-        return alloc_page(gfp_mask);
-}
-
-/* probably needs removed */
-static struct page *ktmm_alloc_pages(gfp_t gfp_mask, unsigned int order, int preferred_nid,
-					nodemask_t *nodemask)
-{
-	//node mask of pmem_node
-	//pass node mask into alloc pages
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
-	nodemask_t nodemask_test;
-	int nid;
-	
-	if ((gfp_mask & __GFP_PMEM) !=0) {
-
-		for_each_node_state(nid, N_MEMORY) {
-			if(NODE_DATA(nid)->pm_node != 0)
-				node_set(nid, nodemask_test);
-			else
-				node_clear(nid, nodemask_test);
-		}
-
-		nodemask = &nodemask_test;
-	}
-	else if ((gfp_mask & __GFP_PMEM) == 0 && pmem_node_id != -1) {
-
-		for_each_node_state(nid, N_MEMORY) {
-			if (NODE_DATA(nid)->pm_node == 0)
-				node_set(nid, nodemask_test);
-			else
-				node_clear(nid, nodemask_test);
-		}
-
-		nodemask = &nodemask_test;
-	}
-	return pt_alloc_pages(gfp_mask, order, preferred_nid, nodemask);
-}
-
-
-/*****************************************************************************
- * Bulk Migration Worker Threads
- *****************************************************************************/
-
-/**
- * promote_worker_fn - worker thread for bulk promotion (PMEM -> DRAM)
- * @arg: unused
- *
- * This worker thread runs continuously and:
- * 1. Pops batches of up to BATCH_N folios from promote_queue
- * 2. Migrates them in bulk to DRAM using migrate_pages()
- * 3. Handles failures by putting pages back to LRU
- */
-static int promote_worker_fn(void *arg)
-{
-	while (!kthread_should_stop()) {
-		struct migrate_node *batch[BATCH_N];
-		int n = 0, i;
-		unsigned long flags;
-		LIST_HEAD(migrate_list);
-		unsigned int nr_succeeded = 0;
-		int ret;
-
-		/* Bulk-pop migrate_nodes from promote queue */
-		spin_lock_irqsave(&promote_queue_lock, flags);
-		while (n < BATCH_N && !list_empty(&promote_queue)) {
-			struct migrate_node *x =
-				list_first_entry(&promote_queue, struct migrate_node, link);
-			list_del_init(&x->link);
-			atomic_dec(&promote_queue_count);
-			batch[n++] = x;
-		}
-		spin_unlock_irqrestore(&promote_queue_lock, flags);
-
-		if (n == 0) {
-			msleep(WORK_SLEEP_MS);
-			continue;
-		}
-
-		/* Build migration list from batch */
-		for (i = 0; i < n; i++) {
-			struct migrate_node *x = batch[i];
-			struct folio *folio = x->folio;
-
-			/* Add folio to migration list */
-			list_add_tail(&folio->lru, &migrate_list);
-			kfree(x);
-		}
-
-		/* Bulk migration attempt */
-		atomic64_add(n, &mig_attempted_promote);
-
-		/*
-		 * Use migrate_pages() to migrate all folios to DRAM
-		 * alloc_normal_page allocates on DRAM (node without __GFP_PMEM)
-		 */
-		ret = migrate_pages(&migrate_list, alloc_normal_page, NULL,
-				    0, MIGRATE_SYNC, MR_NUMA_MISPLACED,
-				    &nr_succeeded);
-
-		if (nr_succeeded > 0) {
-			atomic64_add(nr_succeeded, &mig_succeeded_promote);
-			atomic64_add(nr_succeeded, &total_pages_promoted);
-			atomic64_add(nr_succeeded, &pages_promote_to_dram);
-		}
-
-		/* Any folios still in migrate_list failed - put them back to LRU */
-		if (!list_empty(&migrate_list)) {
-			struct folio *folio, *next;
-			int failed = 0;
-
-			list_for_each_entry_safe(folio, next, &migrate_list, lru) {
-				list_del_init(&folio->lru);
-				folio_put(folio);  /* Drop our reference */
-				failed++;
-			}
-			atomic64_add(failed, &pages_promote_failed);
-		}
-
-		pr_info("ktmm: promote_worker batch=%d succeeded=%u total_attempted=%llu total_succeeded=%llu\n",
-			n, nr_succeeded,
-			(unsigned long long)atomic64_read(&mig_attempted_promote),
-			(unsigned long long)atomic64_read(&mig_succeeded_promote));
-
-		cond_resched();
-	}
-	return 0;
-}
-
-/**
- * demote_worker_fn - worker thread for bulk demotion (DRAM -> PMEM)
- * @arg: unused
- *
- * This worker thread runs continuously and:
- * 1. Pops batches of up to BATCH_N folios from demote_queue
- * 2. Migrates them in bulk to PMEM using migrate_pages()
- * 3. Handles failures by putting pages back to LRU
- */
-static int demote_worker_fn(void *arg)
-{
-	while (!kthread_should_stop()) {
-		struct migrate_node *batch[BATCH_N];
-		int n = 0, i;
-		unsigned long flags;
-		LIST_HEAD(migrate_list);
-		unsigned int nr_succeeded = 0;
-		int ret;
-
-		/* Bulk-pop migrate_nodes from demote queue */
-		spin_lock_irqsave(&demote_queue_lock, flags);
-		while (n < BATCH_N && !list_empty(&demote_queue)) {
-			struct migrate_node *x =
-				list_first_entry(&demote_queue, struct migrate_node, link);
-			list_del_init(&x->link);
-			atomic_dec(&demote_queue_count);
-			batch[n++] = x;
-		}
-		spin_unlock_irqrestore(&demote_queue_lock, flags);
-
-		if (n == 0) {
-			msleep(WORK_SLEEP_MS);
-			continue;
-		}
-
-		/* Build migration list from batch */
-		for (i = 0; i < n; i++) {
-			struct migrate_node *x = batch[i];
-			struct folio *folio = x->folio;
-
-			/* Add folio to migration list */
-			list_add_tail(&folio->lru, &migrate_list);
-			kfree(x);
-		}
-
-		/* Bulk migration attempt */
-		atomic64_add(n, &mig_attempted_demote);
-
-		/*
-		 * Use migrate_pages() to migrate all folios to PMEM
-		 * alloc_pmem_page allocates on PMEM (node with __GFP_PMEM)
-		 */
-		ret = migrate_pages(&migrate_list, alloc_pmem_page, NULL,
-				    0, MIGRATE_SYNC, MR_NUMA_MISPLACED,
-				    &nr_succeeded);
-
-		if (nr_succeeded > 0) {
-			atomic64_add(nr_succeeded, &mig_succeeded_demote);
-			atomic64_add(nr_succeeded, &total_pages_demoted);
-		}
-
-		/* Any folios still in migrate_list failed - put them back to LRU */
-		if (!list_empty(&migrate_list)) {
-			struct folio *folio, *next;
-
-			list_for_each_entry_safe(folio, next, &migrate_list, lru) {
-				list_del_init(&folio->lru);
-				folio_put(folio);  /* Drop our reference */
-			}
-		}
-
-		pr_info("ktmm: demote_worker batch=%d succeeded=%u total_attempted=%llu total_succeeded=%llu\n",
-			n, nr_succeeded,
-			(unsigned long long)atomic64_read(&mig_attempted_demote),
-			(unsigned long long)atomic64_read(&mig_succeeded_demote));
-
-		cond_resched();
-	}
-	return 0;
-}
-
-/**
- * queue_folio_for_promote - add a folio to the promotion queue
- * @folio: folio to queue for promotion (PMEM -> DRAM)
- *
- * Takes a reference on the folio and queues it for bulk migration
- * by the promote_worker thread.
- *
- * Returns: 0 on success, -ENOMEM on allocation failure
- */
-static int queue_folio_for_promote(struct folio *folio)
-{
-	struct migrate_node *n;
-	unsigned long flags;
-
-	n = kmalloc(sizeof(*n), GFP_ATOMIC);
-	if (!n)
-		return -ENOMEM;
-
-	INIT_LIST_HEAD(&n->link);
-	folio_get(folio);  /* Take reference for queue */
-	n->folio = folio;
-
-	spin_lock_irqsave(&promote_queue_lock, flags);
-	list_add_tail(&n->link, &promote_queue);
-	atomic_inc(&promote_queue_count);
-	spin_unlock_irqrestore(&promote_queue_lock, flags);
-
-	atomic64_inc(&pages_queued_promote);
-	return 0;
-}
-
-/**
- * queue_folio_for_demote - add a folio to the demotion queue
- * @folio: folio to queue for demotion (DRAM -> PMEM)
- *
- * Takes a reference on the folio and queues it for bulk migration
- * by the demote_worker thread.
- *
- * Returns: 0 on success, -ENOMEM on allocation failure
- */
-static int queue_folio_for_demote(struct folio *folio)
-{
-	struct migrate_node *n;
-	unsigned long flags;
-
-	n = kmalloc(sizeof(*n), GFP_ATOMIC);
-	if (!n)
-		return -ENOMEM;
-
-	INIT_LIST_HEAD(&n->link);
-	folio_get(folio);  /* Take reference for queue */
-	n->folio = folio;
-
-	spin_lock_irqsave(&demote_queue_lock, flags);
-	list_add_tail(&n->link, &demote_queue);
-	atomic_inc(&demote_queue_count);
-	spin_unlock_irqrestore(&demote_queue_lock, flags);
-
-	atomic64_inc(&pages_queued_demote);
-	return 0;
-}
-
-
-/*****************************************************************************
- * Node Scanning, Shrinking, and Promotion
- *****************************************************************************/
-
-/**
- * ktmm_cgroup_below_low - if memory cgroup is below low memory thresh
- *
- * @memcg:	memory cgroup
- *
- * This is a reimplementation from the kernel function.
- */
-static bool ktmm_cgroup_below_low(struct mem_cgroup *memcg)
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
-	return READ_ONCE(memcg->memory.elow) >=
-		page_counter_read(&memcg->memory);
-}
-
-
-/**
- * ktmm_cgroup_below_min - if memory cgroup is below min memory thresh
- *
- * @memcg:	memory cgroup
- *
- * This is a reimplementation from the kernel function.
- */
-static bool ktmm_cgroup_below_min(struct mem_cgroup *memcg)
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
-	return READ_ONCE(memcg->memory.emin) >=
-		page_counter_read(&memcg->memory);
-}
-
-
-/**
- * ktmm_update_lru_sizes - updates the size of the lru list
- *
- * @lruvec:		per memcg lruvec
- * @lru:		the lru list
- * @nr_zone_taken:	the number of folios taken from the lru list
- *
- * This is a reimplementation from the kernel function.
- */
-static __always_inline void ktmm_update_lru_sizes(struct lruvec *lruvec,
-			enum lru_list lru, unsigned long *nr_zone_taken)
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
-	int zid;
-
-	for (zid = 0; zid < MAX_NR_ZONES; zid++) {
-		if (!nr_zone_taken[zid])
-			continue;
-
-		ktmm_cgroup_update_lru_size(lruvec, lru, zid, -nr_zone_taken[zid]);
-	}
-
-}
-
-
-/**
- * ktmm_folio_evictable - if the folio is evictable or not
- *
- * @folio:	folio to test
- *
- * This is a reimplementation from the kernel function.
- */
-static inline bool ktmm_folio_evictable(struct folio *folio)
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
-	bool ret;
-
-	rcu_read_lock();
-	ret = !mapping_unevictable(folio_mapping(folio)) &&
-		!folio_test_mlocked(folio);
-	rcu_read_unlock();
-	return ret;
-}
-
-
-/**
- * ktmm_folio_needs_release - if the folio needs release before free
- *
- * @folio:	folio to test
- *
- * This is a reimplementation from the kernel function.
- */
-static inline bool ktmm_folio_needs_release(struct folio *folio)
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-	struct address_space *mapping = folio_mapping(folio);
-
-	return folio_has_private(folio) || (mapping && mapping_release_always(mapping));
-}
-
-/**
- * is_file_folio - check if a folio is suitable for migration
- * @folio: folio to check
- *
- * Returns true if the folio is file-backed and suitable for migration.
- * Rejects anonymous pages, huge pages, and pages without valid mappings.
- */
-static __always_inline bool is_file_folio(struct folio *folio)
-{
-	if (folio_test_anon(folio)) return false;
-	if (folio_test_hugetlb(folio) || folio_test_large(folio)) return false;
-	if (!folio_mapping(folio)) return false;
-	if (!folio_mapping(folio)->host) return false;
-	return true;
-}
-
-/**
- * scan_promote_list - scan promote lru folios for migration
- *
- * @nr_to_scan:		number to scan
- * @lruvec:		target lruvec
- * @sc:			scan control
- * @lru:		lru list to scan
- * @pgdat:		node data
- *
- * Scans the promote lru list for candidates to either migrate or bump down back
- * to the active lru list. This function should only really be utilized by the
- * pmem node.
- * * MODIFIED: Now queues folios for bulk migration instead of one-by-one migration.
- * Uses promote_queue and promote_worker thread for efficient batched migration.
- */
-static void scan_promote_list(unsigned long nr_to_scan,
-				struct lruvec *lruvec,
-				struct scan_control *sc,
-				enum lru_list lru,
-				struct pglist_data *pgdat)
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
-	unsigned long nr_taken;
-	unsigned long nr_scanned;
-	unsigned long nr_queued = 0;
-	isolate_mode_t isolate_mode = 0;
-	LIST_HEAD(l_hold);
-	LIST_HEAD(l_putback);  /* Folios to put back to LRU */
-	int file = is_file_lru(lru);
-	int nid = pgdat->node_id;
-
-	struct list_head *src = &lruvec->lists[lru];
-
-	if (list_empty(src))
-		// pr_debug("promote list empty");
-		return;
-
-	//pr_debug("scanning promote list");
-
-	if (!sc->may_unmap)
-		isolate_mode |= ISOLATE_UNMAPPED;
-
-	ktmm_lru_add_drain();
-
-	spin_lock_irq(&lruvec->lru_lock);
-
-	nr_taken = ktmm_isolate_lru_folios(nr_to_scan, lruvec, &l_hold,
-					&nr_scanned, sc, lru);
-	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
-
-	spin_unlock_irq(&lruvec->lru_lock);
-
-	/* Track pages scanned from promote list */
-	atomic64_add(nr_taken, &pages_scanned_promote);
-
-	// pr_debug("pgdat %d scanned %lu on promote list", nid, nr_scanned);
-	// pr_debug("pgdat %d taken %lu on promote list", nid, nr_taken);
-
-	/*
-	 * MIGRATION: Queue pages for bulk promotion (PMEM -> DRAM)
-	 * Instead of migrating one-by-one, we queue folios for the
-	 * promote_worker thread to handle in batches.
-	 */
-	if (nr_taken > 0) {
-		struct folio *folio, *next;
-
-		list_for_each_entry_safe(folio, next, &l_hold, lru) {
-			/* Only migrate file-backed pages */
-			if (!is_file_folio(folio)) {
-				atomic64_inc(&pages_promote_failed);
-				/* Move to putback list */
-				list_move(&folio->lru, &l_putback);
-				continue;
-			}
-
-			/* Remove from l_hold and queue for bulk migration */
-			list_del_init(&folio->lru);
-
-			if (queue_folio_for_promote(folio) == 0) {
-				nr_queued++;
-				atomic64_inc(&pages_active_to_promote);
-			} else {
-				/* Failed to queue - put back to LRU */
-				list_add(&folio->lru, &l_putback);
-				atomic64_inc(&pages_promote_failed);
-			}
-		}
-
-		if (nr_queued > 0) {
-			printk(KERN_INFO "ktmm: pgdat %d QUEUED %lu folios for promotion (PMEM->DRAM)\n",
-			       nid, nr_queued);
-		}
-	}
-	spin_lock_irq(&lruvec->lru_lock);
-
-	/* Move any remaining folios back to LRU (l_hold should be empty now) */
-	ktmm_move_folios_to_lru(lruvec, &l_hold);
-	ktmm_move_folios_to_lru(lruvec, &l_putback);
-	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
-
-	spin_unlock_irq(&lruvec->lru_lock);
-
-	ktmm_cgroup_uncharge_list(&l_hold);
-	ktmm_free_unref_page_list(&l_hold);
-	ktmm_cgroup_uncharge_list(&l_putback);
-	ktmm_free_unref_page_list(&l_putback);
-}
-
-
-/**
- * scan_active_list - scan lru folios from the active list
- *
- * @nr_to_scan:		number to scan
- * @lruvec:		target lruvec
- * @sc:			scan control
- * @lru:		lru list to scan
- * @pgdat:		node data
- *
- * This is a reimplementation of shrink_active_list from vmscan.c. Here, we scan
- * the active list and move folios either down to the inactive list or up to the
- * promote list. Folios will only be moved to the promote list if we are
- * scanning on the pmem node.
- */
-static void scan_active_list(unsigned long nr_to_scan,
-				struct lruvec *lruvec,
-				struct scan_control *sc,
-				enum lru_list lru,
-				struct pglist_data *pgdat)
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
-	unsigned long nr_taken;
-	unsigned long nr_scanned;
-	unsigned long vm_flags;
-	LIST_HEAD(l_hold);	// The folios which were snipped off
-	LIST_HEAD(l_active);
-	LIST_HEAD(l_inactive);
-	LIST_HEAD(l_promote);
-	unsigned nr_deactivate, nr_activate, nr_promote;
-	unsigned nr_rotated = 0;
-	int file = is_file_lru(lru);
-	int nid = pgdat->node_id;
-	
-	//pr_info("scanning active list");
-
-	// make sure pages in per-cpu lru list are added
-	ktmm_lru_add_drain();
-
-	spin_lock_irq(&lruvec->lru_lock);
-
-	nr_taken = ktmm_isolate_lru_folios(nr_to_scan, lruvec, &l_hold,
-				     &nr_scanned, sc, lru);
-
-	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
-
-	spin_unlock_irq(&lruvec->lru_lock);
-
-	/* Track pages scanned from active list */
-	atomic64_add(nr_taken, &pages_scanned_active);
-
-	while (!list_empty(&l_hold)) {
-		struct folio *folio;
-
-		cond_resched();
-		folio = lru_to_folio(&l_hold);
-		list_del(&folio->lru);
-
-		/* ADDED: Track page access pattern during active list scanning */
-		track_folio_access(folio, pgdat, "ACTIVE_LIST");
-
-		if (unlikely(!ktmm_folio_evictable(folio))) {
-			ktmm_folio_putback_lru(folio);
-			continue;
-		}
-
-		if (unlikely(buffer_heads_over_limit)) {
-			if (ktmm_folio_needs_release(folio) &&
-			    folio_trylock(folio)) {
-				filemap_release_folio(folio, 0);
-				folio_unlock(folio);
-			}
-		}
-
-		// node migration
-		if (pgdat->pm_node != 0) {
-			//pr_debug("active pm_node");
-			if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
-				// pr_debug("set promote");
-				//SetPagePromote(page); NEEDS TO BE MODULE TRACKED
-				folio_set_promote(folio);
-				list_add(&folio->lru, &l_promote);
-				/* Track active -> promote movement */
-				atomic64_inc(&pages_active_to_promote);
-				continue;
-			}
-		}
-
-		// might not need, we only care about promoting here in the
-		// module
-		/*
-		if (sc->only_promote) {
-			list_add(&folio->lru, &l_active);
-			continue;
-		}
-		*/
-
-		// Referenced or rmap lock contention: rotate
-		if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup,
-				     &vm_flags) != 0) {
-			/*
-			  Identify referenced, file-backed active folios and
-			  give them one more trip around the active list. So
-			  that executable code get better chances to stay in
-			  memory under moderate memory pressure.  Anon folios
-			  are not likely to be evicted by use-once streaming
-			  IO, plus JVM can create lots of anon VM_EXEC folios,
-			  so we ignore them here.
-			*/
-			if ((vm_flags & VM_EXEC) && folio_is_file_lru(folio)) {
-				nr_rotated += folio_nr_pages(folio);
-				list_add(&folio->lru, &l_active);
-				continue;
-			}
-		}
-
-		folio_clear_active(folio);	// we are de-activating
-		folio_set_workingset(folio);
-		list_add(&folio->lru, &l_inactive);
-		/* Track active -> inactive movement (deactivation) */
-		atomic64_inc(&pages_active_to_inactive);
-	}
-
-	// Move folios back to the lru list.
-	spin_lock_irq(&lruvec->lru_lock);
-
-	nr_activate = ktmm_move_folios_to_lru(lruvec, &l_active);
-	nr_deactivate = ktmm_move_folios_to_lru(lruvec, &l_inactive);
-	nr_promote = ktmm_move_folios_to_lru(lruvec, &l_promote);
-
-	// pr_debug("pgdat %d folio activated: %d", nid, nr_activate);
-	// pr_debug("pgdat %d folio deactivated: %d", nid, nr_deactivate);
-	// pr_debug("pgdat %d folio promoted: %d", nid, nr_promote);
-
-	// Keep all free folios in l_active list
-	list_splice(&l_inactive, &l_active);
-
-	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
-
-	spin_unlock_irq(&lruvec->lru_lock);
-
-	ktmm_cgroup_uncharge_list(&l_active);
-	ktmm_free_unref_page_list(&l_active);
-}
-
-
-/**
- * scan_inactive_list - scan inactive lru list folios
- *
- * @nr_to_scan:		number to scan
- * @lruvec:		target lruvec
- * @sc:			scan control
- * @lru:		lru list to scan
- * @pgdat:		node data
- *
- * This is a reimplementation of shrink_inactive_list from vmscan.c. Here, we
- * scan folios and move them down to the pmem node if they have not been
- * referenced. If they are already on the pmem node, we only consider moving
- * them up the to active list if they have been referenced. We do not do any
- * reclaiming here, and let direct reclaim or kswapd take care of reclaiming
- * folios when neccessary.
- *
- * MODIFIED: Now queues folios for bulk demotion instead of one-by-one migration.
- * Uses demote_queue and demote_worker thread for efficient batched migration.
- */
-static unsigned long scan_inactive_list(unsigned long nr_to_scan,
-					struct lruvec *lruvec,
-					struct scan_control *sc,
-					enum lru_list lru,
-					struct pglist_data *pgdat)
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
-	LIST_HEAD(folio_list);
-	LIST_HEAD(l_active);	/* folios to activate (for PMEM node) */
-	LIST_HEAD(l_putback);	/* folios to put back to LRU */
-	unsigned long nr_scanned;
-	unsigned long nr_taken = 0;
-	unsigned long nr_queued = 0;
-	unsigned long nr_activate = 0;
-	unsigned long vm_flags;
-	bool file = is_file_lru(lru);
-	int nid = pgdat->node_id;
-
-	//pr_info("scanning inactive list");
-
-	// make sure pages in per-cpu lru list are added
-	ktmm_lru_add_drain();
-
-	// We want to isolate the pages we are going to scan.
-	spin_lock_irq(&lruvec->lru_lock);
-
-	nr_taken = ktmm_isolate_lru_folios(nr_to_scan, lruvec, &folio_list,
-				     &nr_scanned, sc, lru);
-
-	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
-
-	spin_unlock_irq(&lruvec->lru_lock);
-
-	if (nr_taken == 0) return 0;
-
-	/* Track pages scanned from inactive list */
-	atomic64_add(nr_taken, &pages_scanned_inactive);
-
-	/*
-	 * PMEM NODE: Check if inactive pages are referenced and activate them.
-	 * This is the key step to move pages from inactive -> active list,
-	 * so they can eventually be promoted to DRAM.
-	 * Flow: inactive -> active -> promote -> DRAM
-	 */
-	if (pgdat->pm_node != 0) {
-		struct folio *folio, *next;
-		
-		list_for_each_entry_safe(folio, next, &folio_list, lru) {
-			/* Check if the folio was referenced (accessed) */
-			if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
-				/* Referenced! Move to active list */
-				list_del(&folio->lru);
-				folio_set_active(folio);
-				list_add(&folio->lru, &l_active);
-				nr_activate++;
-				/* Track inactive -> active movement */
-				atomic64_inc(&pages_inactive_to_active);
-			}
-			/* Unreferenced pages stay in folio_list and go back to inactive */
-		}
-	}
-
-	/*
-	 * MIGRATION: Queue pages for bulk demotion (DRAM -> PMEM)
-	 * Instead of migrating one-by-one, we queue folios for the
-	 * demote_worker thread to handle in batches.
-	 */
-	if (pgdat->pm_node == 0 && pmem_node_id != -1) {
-		struct folio *folio, *next;
-
-		list_for_each_entry_safe(folio, next, &folio_list, lru) {
-			/* Only migrate file-backed pages */
-			if (!is_file_folio(folio)) {
-				/* Move to putback list */
-				list_move(&folio->lru, &l_putback);
-				continue;
-			}
-
-			/* Remove from folio_list and queue for bulk migration */
-			list_del_init(&folio->lru);
-
-			if (queue_folio_for_demote(folio) == 0) {
-				nr_queued++;
-			} else {
-				/* Failed to queue - put back to LRU */
-				list_add(&folio->lru, &l_putback);
-			}
-		}
-
-		if (nr_queued > 0) {
-			printk(KERN_INFO "ktmm: pgdat %d QUEUED %lu folios for demotion (DRAM->PMEM)\n",
-			       nid, nr_queued);
-		}
-	}
-  
-	spin_lock_irq(&lruvec->lru_lock);
-
-	/* Move activated folios to active LRU list (PMEM node only) */
-	if (nr_activate > 0) {
-		ktmm_move_folios_to_lru(lruvec, &l_active);
-	}
-
-	ktmm_move_folios_to_lru(lruvec, &folio_list);
-	ktmm_move_folios_to_lru(lruvec, &l_putback);
-	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
-
-	spin_unlock_irq(&lruvec->lru_lock);
-
-	ktmm_cgroup_uncharge_list(&l_active);
-	ktmm_free_unref_page_list(&l_active);
-	ktmm_cgroup_uncharge_list(&folio_list);
-	ktmm_free_unref_page_list(&folio_list);
-	ktmm_cgroup_uncharge_list(&l_putback);
-	ktmm_free_unref_page_list(&l_putback);
-
-	return nr_queued;
-}
-
-
-/* SIMILAR TO: shrink_list() */
-/**
- * scan_list - determines which scan function to call per list
- *
- * @lru:		lru list to scan
- * @nr_to_scan:		number to scan
- * @lruvec:		target lruvec
- * @sc:			scan control
- * @pgdat:		node data
- */
-static unsigned long scan_list(enum lru_list lru, 
-				unsigned long nr_to_scan,
-				struct lruvec *lruvec, 
-				struct scan_control *sc,
-				struct pglist_data *pgdat)
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
-	if (is_active_lru(lru))
-		scan_active_list(nr_to_scan, lruvec, sc, lru, pgdat);
-
-	if(is_promote_lru(lru))
-		scan_promote_list(nr_to_scan, lruvec, sc, lru, pgdat);
-
-	return scan_inactive_list(nr_to_scan, lruvec, sc, lru, pgdat);
-}
-
-
-/**
- * scan_node - scan a node's LRU lists
- * * @pgdat:	node data struct
- * @nid:	node ID number
- * @reclaim:	memory reclaim cookie
- *
- * This is responsible for scanning the lruvec per memory cgroup.
- */
-static void scan_node(pg_data_t *pgdat, 
-		struct scan_control *sc,
-		struct mem_cgroup_reclaim_cookie *reclaim)
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
-	enum lru_list lru;
-	struct mem_cgroup *memcg;
-	int nid = pgdat->node_id;
-	int memcg_count;
-	
-	/* Timing and page count tracking */
-	u64 scan_start_time, scan_end_time;
-	u64 total_scan_time_us;
-	unsigned long total_pages_scanned = 0;
-
-	scan_start_time = ktime_get_ns();
-
-	memset(&sc->nr, 0, sizeof(sc->nr));
-	memcg = ktmm_mem_cgroup_iter(NULL, NULL, reclaim);
-	sc->target_mem_cgroup = memcg;
-
-	//pr_info("scanning lists on node %d", nid);
-	memcg_count = 0;
-	do {
-		struct lruvec *lruvec = &memcg->nodeinfo[nid]->lruvec;
-		unsigned long reclaimed;
-		unsigned long scanned;
-
-		memcg_count += 1;
-
-		if (ktmm_cgroup_below_min(memcg)) {
-			/*
-			 * Hard protection.
-			 * If there is no reclaimable memory, OOM.
-			 */
-			continue;
-		} else if (ktmm_cgroup_below_low(memcg)) {
-			/*
-			 * Soft protection.
-			 * Respect the protection only as long as
-			 * there is an unprotected supply of 
-			 * reclaimable memory from other cgroups.
-			 */
-			if (!sc->memcg_low_reclaim) {
-				sc->memcg_low_skipped = 1;
-				continue;
-			}
-			// memcg_memory_event(memcg, MEMCG_LOW);
-		}
-
-		reclaimed = sc->nr_reclaimed;
-		scanned = sc->nr_scanned;
-
-		for_each_evictable_lru(lru) {
-			unsigned long nr_to_scan = 1024;  //3000000//sudarshan changed this to 256 for better page access detection
-
-			scan_list(lru, nr_to_scan, lruvec, sc, pgdat);
-			
-			/* Track total pages scanned across all LRU lists */
-			total_pages_scanned += nr_to_scan;
-		}
-	} while ((memcg = ktmm_mem_cgroup_iter(NULL, memcg, NULL)));
-	
-	/* Calculate and print scan statistics */
-	scan_end_time = ktime_get_ns();
-	total_scan_time_us = (scan_end_time - scan_start_time) / 1000;  /* Convert nanoseconds to microseconds */
-	
-	// printk(KERN_INFO "*** SCAN_STATS (Node %d): Total Pages Scanned: %lu, Total Scan Time: %llu us ***\n", 
-	//        nid, total_pages_scanned, total_scan_time_us);
-}
-
-
-/*****************************************************************************
- * Daemon Functions & Related
- *****************************************************************************/
-
-/**
- * tmemd_try_to_sleep - put tmemd to sleep for a short time
- *
- * @pgdat:	node data
- * @nid:	node id
- *
- * @returns:	none
- *
- */
-static void tmemd_try_to_sleep(pg_data_t *pgdat, int nid)
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
-	long remaining = 0;
-	DEFINE_WAIT(wait);
-
-	//pr_info("tmemd trying to sleep: %d", nid);
-
-	if (freezing(current) || kthread_should_stop())
-		return;
-	
-	prepare_to_wait(&tmemd_wait[nid], &wait, TASK_INTERRUPTIBLE);
-	remaining = schedule_timeout(5 * HZ);  //sudarshan changed to 5 seconds for better page access detection
-
-	finish_wait(&tmemd_wait[nid], &wait);
-}
-
-
-/**
- * tmemd - page promotion daemon
- *
- * @p:	pointer to node data struct (pglist_data)
- *
- * This is stored in a local array for module access only.
- */
-static int tmemd(void *p) 
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
-	pg_data_t *pgdat = (pg_data_t *)p;
-	int nid = pgdat->node_id;
-	struct task_struct *task = current;
-	const struct cpumask *cpumask = cpumask_of_node(nid);
-
-	struct mem_cgroup_reclaim_cookie reclaim = {
-		.pgdat = pgdat,
-	};
-
-	struct reclaim_state reclaim_state = {
-		.reclaimed_slab = 0,
-	};
-
-	struct scan_control sc = {
-		.nr_to_reclaim = SWAP_CLUSTER_MAX,
-		//.gfp_mask = TMEMD_GFP_FLAGS,
-		.priority = DEF_PRIORITY,
-		.may_writepage = !laptop_mode, //do not delay writing to disk
-		.may_unmap = 1,
-		.may_swap = 1,
-		.reclaim_idx = MAX_NR_ZONES - 1,
-		.only_promote = 1,
-	};
-
-	// Only allow node's CPUs to run this task
-	if(!cpumask_empty(cpumask))
-		set_cpus_allowed_ptr(task, cpumask);
-
-	current->reclaim_state = &reclaim_state;
-
-	/*
-	 * Tell MM that we are a memory allocator, and that we are actually
-	 * kswapd. We are also set to suspend as needed.
-	 *
-	 * Flags are located in include/sched.h for more info.
-	 */
-	task->flags |= PF_MEMALLOC | PF_KSWAPD;
-
-
-	//pr_info("tmemd started on node %d", nid);
-
-	/*
-	 * Loop every few seconds and scan the node's LRU lists.
-	 * If the thread is signaled to stop, we will exit.
-	 */
-	for ( ; ; )
-	{
-		scan_node(pgdat, &sc, &reclaim);
-
-		if (kthread_should_stop()) break;
-
-		tmemd_try_to_sleep(pgdat, nid);
-	}
-
-	task->flags &= ~(PF_MEMALLOC | PF_KSWAPD);
-	current->reclaim_state = NULL;
-	
-	return 0;
-}
-
-
-/*****************************************************************************
- * Start & Stop
- *****************************************************************************/
-
-/****************** ADD VMSCAN HOOKS HERE ************************/
-static struct ktmm_hook vmscan_hooks[] = {
-	HOOK("mem_cgroup_iter", ktmm_mem_cgroup_iter, &pt_mem_cgroup_iter),
-	HOOK("zone_watermark_ok", ktmm_zone_watermark_ok_safe, &pt_zone_watermark_ok_safe),
-	HOOK("first_online_pgdat", ktmm_first_online_pgdat, &pt_first_online_pgdat),
-	HOOK("next_zone", ktmm_next_zone, &pt_next_zone),
-	HOOK("free_unref_page_list", ktmm_free_unref_page_list, &pt_free_unref_page_list),
-	HOOK("lru_add_drain", ktmm_lru_add_drain, &pt_lru_add_drain),
-	HOOK("mem_cgroup_update_lru_size", ktmm_cgroup_update_lru_size, &pt_cgroup_update_lru_size),
-	HOOK("__mem_cgroup_uncharge_list", ktmm_cgroup_uncharge_list, &pt_cgroup_uncharge_list),
-	HOOK("isolate_lru_folios", ktmm_isolate_lru_folios, &pt_isolate_lru_folios),
-	HOOK("move_folios_to_lru", ktmm_move_folios_to_lru, &pt_move_folios_to_lru),
-	HOOK("folio_putback_lru", ktmm_folio_putback_lru, &pt_folio_putback_lru),
-	HOOK("folio_referenced", ktmm_folio_referenced, &pt_folio_referenced),
-	HOOK("__alloc_pages", ktmm_alloc_pages, &pt_alloc_pages),
-};
-
-
-/**
- * drain_migration_queues - drain all pending migrations before exit
- *
- * Cleans up any folios remaining in the promote and demote queues
- * by dropping their references and freeing the queue nodes.
- */
-static void drain_migration_queues(void)
-{
-	struct migrate_node *n;
-	unsigned long flags;
-
-	/* Drain promote queue */
-	while (1) {
-		spin_lock_irqsave(&promote_queue_lock, flags);
-
-		if (list_empty(&promote_queue)) {
-			spin_unlock_irqrestore(&promote_queue_lock, flags);
-			break;
-		}
-
-		n = list_first_entry(&promote_queue, struct migrate_node, link);
-		list_del_init(&n->link);
-		atomic_dec(&promote_queue_count);
-
-		spin_unlock_irqrestore(&promote_queue_lock, flags);
-
-		folio_put(n->folio);
-		kfree(n);
-	}
-
-	/* Drain demote queue */
-	while (1) {
-		spin_lock_irqsave(&demote_queue_lock, flags);
-
-		if (list_empty(&demote_queue)) {
-			spin_unlock_irqrestore(&demote_queue_lock, flags);
-			break;
-		}
-
-		n = list_first_entry(&demote_queue, struct migrate_node, link);
-		list_del_init(&n->link);
-		atomic_dec(&demote_queue_count);
-
-		spin_unlock_irqrestore(&demote_queue_lock, flags);
-
-		folio_put(n->folio);
-		kfree(n);
-	}
-}
-
-
-/**
- * Daemons are only started on online/active nodes. They are
- * currently stored in a local array.
- *
- * We will also need to define the behavior for hot-plugging nodes
- * into the system, as this code only sets up daemons on nodes 
- * that are online the moment the module starts.
- *
- */
-int tmemd_start_available(void) 
-{
-  
-	int i;
-	int nid;
-	int ret;
-
-	set_ktmm_scan();
-
-	/* initialize wait queues for sleeping */
-	for (i = 0; i < MAX_NUMNODES; i++)
-		init_waitqueue_head(&tmemd_wait[i]);
-
-	ret = install_hooks(vmscan_hooks, ARRAY_SIZE(vmscan_hooks));
-
-	/* Initialize and start the page stats timer */
-	timer_setup(&page_stats_timer, page_stats_timer_callback, 0);
-	mod_timer(&page_stats_timer, jiffies + 5 * HZ);
-
-	/* Start the bulk migration worker threads */
-	promote_worker_task = kthread_run(promote_worker_fn, NULL, "ktmm_promote_worker");
-	if (IS_ERR(promote_worker_task)) {
-		promote_worker_task = NULL;
-		pr_err("ktmm: failed to start promote_worker thread\n");
-	} else {
-		pr_info("ktmm: promote_worker thread started\n");
-	}
-
-	demote_worker_task = kthread_run(demote_worker_fn, NULL, "ktmm_demote_worker");
-	if (IS_ERR(demote_worker_task)) {
-		demote_worker_task = NULL;
-		pr_err("ktmm: failed to start demote_worker thread\n");
-	} else {
-		pr_info("ktmm: demote_worker thread started\n");
-	}
-	
-	for_each_online_node(nid)
-	{
-		pg_data_t *pgdat = NODE_DATA(nid);
-
-		/* !! EMULATE PMEM NODE !! */
-		if (nid == 1) {
-			pr_info("Emulating pmem node");
-			set_pmem_node_id(nid);
-			set_pmem_node(nid);
-		}
-
-        	tmemd_list[nid] = kthread_run(&tmemd, pgdat, "tmemd");
-	}
-
-	return ret;
-}
-
-
-/**
- * This stops all thread daemons for each node when exiting.
- * It uses the node ID to grab the daemon out of our local list.
- */
-void tmemd_stop_all(void)
-{
-	int nid;
-
-	/* Stop and delete the page stats timer */
-	del_timer_sync(&page_stats_timer);
-
-	/* Stop the bulk migration worker threads */
-	if (promote_worker_task) {
-		kthread_stop(promote_worker_task);
-		promote_worker_task = NULL;
-		pr_info("ktmm: promote_worker thread stopped\n");
-	}
-
-	if (demote_worker_task) {
-		kthread_stop(demote_worker_task);
-		demote_worker_task = NULL;
-		pr_info("ktmm: demote_worker thread stopped\n");
-	}
-
-	/* Drain any remaining items in migration queues */
-	drain_migration_queues();
-
-	/* Print final stats before stopping */
-	printk(KERN_INFO "*** KTMM FINAL STATS: Total Promoted: %llu, Total Demoted: %llu ***\n",
-	       (u64)atomic64_read(&total_pages_promoted),
-	       (u64)atomic64_read(&total_pages_demoted));
-
-	/* Print final page flow stats */
-	printk(KERN_INFO "*** KTMM FINAL PAGE FLOW STATS ***\n");
-	printk(KERN_INFO "  Total Scanned: inactive=%llu, active=%llu, promote=%llu\n",
-	       (u64)atomic64_read(&pages_scanned_inactive),
-	       (u64)atomic64_read(&pages_scanned_active),
-	       (u64)atomic64_read(&pages_scanned_promote));
-	printk(KERN_INFO "  Total Flow: inactive->active=%llu, active->inactive=%llu\n",
-	       (u64)atomic64_read(&pages_inactive_to_active),
-	       (u64)atomic64_read(&pages_active_to_inactive));
-	printk(KERN_INFO "  Total Flow: active->promote=%llu, promote->DRAM=%llu (failed=%llu)\n",
-	       (u64)atomic64_read(&pages_active_to_promote),
-	       (u64)atomic64_read(&pages_promote_to_dram),
-	       (u64)atomic64_read(&pages_promote_failed));
-	printk(KERN_INFO "  Bulk Promote: attempted=%llu, succeeded=%llu (queued=%llu)\n",
-	       (u64)atomic64_read(&mig_attempted_promote),
-	       (u64)atomic64_read(&mig_succeeded_promote),
-	       (u64)atomic64_read(&pages_queued_promote));
-	printk(KERN_INFO "  Bulk Demote: attempted=%llu, succeeded=%llu (queued=%llu)\n",
-	       (u64)atomic64_read(&mig_attempted_demote),
-	       (u64)atomic64_read(&mig_succeeded_demote),
-	       (u64)atomic64_read(&pages_queued_demote));
-	printk(KERN_INFO "*** END FINAL PAGE FLOW STATS ***\n");
-
-	for_each_online_node(nid)
-	{
-		kthread_stop(tmemd_list[nid]);
-	}
-
-	uninstall_hooks(vmscan_hooks, ARRAY_SIZE(vmscan_hooks));
-}
+ #include <linux/atomic.h>
+ #include <linux/bitops.h>
+ #include <linux/buffer_head.h>
+ #include <linux/cgroup.h>
+ #include <linux/delay.h>
+ #include <linux/freezer.h>
+ #include <linux/fs.h>
+ #include <linux/gfp.h>
+ #include <linux/hashtable.h>
+ #include <linux/kernel.h>
+ #include <linux/kprobes.h>
+ #include <linux/kthread.h>
+ #include <linux/list.h>
+ #include <linux/module.h>
+ #include <linux/memcontrol.h>
+ #include <linux/mmzone.h>
+ #include <linux/mm_inline.h>
+ #include <linux/migrate.h>
+ #include <linux/migrate_mode.h>
+ #include <linux/nodemask.h>
+ #include <linux/numa.h>
+ #include <linux/page-flags.h>
+ #include <linux/page_ref.h>
+ #include <linux/pagemap.h>
+ #include <linux/pagevec.h>
+ #include <linux/printk.h>
+ #include <linux/rmap.h>
+ #include <linux/signal.h>
+ #include <linux/sched.h>
+ #include <linux/spinlock.h>
+ #include <linux/swap.h>
+ #include <linux/vmstat.h>
+ #include <linux/wait.h>
+ #include <linux/jiffies.h>
+ #include <linux/timer.h>
+ #include "ktmm_hook.h"
+ #include "ktmm_vmscan.h"
+ 
+ // TMEMD_GFP_FLAGS changed to prevent IO deadlocks
+ #define TMEMD_GFP_FLAGS GFP_NOIO
+ 
+ int pmem_node = -1;
+ 
+ /* holds pointers to the tmemd daemons running per node */
+ static struct task_struct *tmemd_list[MAX_NUMNODES];
+ 
+ /* per node tmemd wait queues */
+ wait_queue_head_t tmemd_wait[MAX_NUMNODES];
+ 
+ /*****************************************************************************
+  * Bulk Migration Configuration
+  *****************************************************************************/
+ #define BATCH_N 32            
+ #define WORK_SLEEP_MS 10      
+ 
+ /*****************************************************************************
+  * Bulk Migration Queue Structures
+  *****************************************************************************/
+ struct migrate_node {
+   struct list_head link;
+   struct folio *folio;
+ };
+ 
+ /* Promotion queue: PMEM -> DRAM (hot pages) */
+ static LIST_HEAD(promote_queue);
+ static DEFINE_SPINLOCK(promote_queue_lock);
+ static atomic_t promote_queue_count = ATOMIC_INIT(0);
+ 
+ /* Demotion queue: DRAM -> PMEM (cold pages) */
+ static LIST_HEAD(demote_queue);
+ static DEFINE_SPINLOCK(demote_queue_lock);
+ static atomic_t demote_queue_count = ATOMIC_INIT(0);
+ 
+ /* Worker threads */
+ static struct task_struct *promote_worker_task;
+ static struct task_struct *demote_worker_task;
+ 
+ /*****************************************************************************
+  * Statistics Counters
+  *****************************************************************************/
+ static atomic64_t total_pages_promoted = ATOMIC64_INIT(0);
+ static atomic64_t total_pages_demoted = ATOMIC64_INIT(0);
+ static atomic64_t mig_attempted_promote = ATOMIC64_INIT(0);
+ static atomic64_t mig_succeeded_promote = ATOMIC64_INIT(0);
+ static atomic64_t mig_attempted_demote = ATOMIC64_INIT(0);
+ static atomic64_t mig_succeeded_demote = ATOMIC64_INIT(0);
+ static atomic64_t pages_inactive_to_active = ATOMIC64_INIT(0);
+ static atomic64_t pages_active_to_inactive = ATOMIC64_INIT(0);
+ static atomic64_t pages_active_to_promote = ATOMIC64_INIT(0);
+ static atomic64_t pages_promote_to_dram = ATOMIC64_INIT(0);
+ static atomic64_t pages_promote_failed = ATOMIC64_INIT(0);
+ static atomic64_t pages_scanned_inactive = ATOMIC64_INIT(0);
+ static atomic64_t pages_scanned_active = ATOMIC64_INIT(0);
+ static atomic64_t pages_scanned_promote = ATOMIC64_INIT(0);
+ static atomic64_t pages_queued_promote = ATOMIC64_INIT(0);
+ static atomic64_t pages_queued_demote = ATOMIC64_INIT(0);
+ 
+ static struct timer_list page_stats_timer;
+ 
+ static void page_stats_timer_callback(struct timer_list *t)
+ {
+   u64 promoted = atomic64_read(&total_pages_promoted);
+   u64 demoted = atomic64_read(&total_pages_demoted);
+   u64 promote_q = atomic_read(&promote_queue_count);
+   u64 demote_q = atomic_read(&demote_queue_count);
+ 
+   printk(KERN_INFO "KTMM STATS: Promoted=%llu Demoted=%llu | Queues: P=%llu D=%llu\n",
+          promoted, demoted, promote_q, demote_q);
+ 
+   mod_timer(&page_stats_timer, jiffies + 5 * HZ);
+ }
+ 
+ /************** HOOK POINTERS *****************************/
+ static struct mem_cgroup *(*pt_mem_cgroup_iter)(struct mem_cgroup *root,
+         struct mem_cgroup *prev,
+         struct mem_cgroup_reclaim_cookie *reclaim);
+ static bool (*pt_zone_watermark_ok_safe)(struct zone *z, unsigned int order,
+           unsigned long mark, int highest_zoneidx);
+ static struct pglist_data *(*pt_first_online_pgdat)(void);
+ static struct zone *(*pt_next_zone)(struct zone *zone);
+ static void (*pt_free_unref_page_list)(struct list_head *list);
+ static void (*pt_lru_add_drain)(void);
+ static void (*pt_cgroup_update_lru_size)(struct lruvec *lruvec, enum lru_list lru,
+           int zid, int nr_pages);
+ static void (*pt_cgroup_uncharge_list)(struct list_head *page_list);
+ static unsigned long (*pt_isolate_lru_folios)(unsigned long nr_to_scan, struct lruvec *lruvec,
+           struct list_head *dst, unsigned long *nr_scanned,
+           struct scan_control *sc, enum lru_list lru);
+ static unsigned int (*pt_move_folios_to_lru)(struct lruvec *lruvec, struct list_head *list);
+ static void (*pt_folio_putback_lru)(struct folio *folio);
+ static int (*pt_folio_referenced)(struct folio *folio, int is_locked,
+         struct mem_cgroup *memcg, unsigned long *vm_flags);
+ static struct page *(*pt_alloc_pages)(gfp_t gfp_mask, unsigned int order, int preferred_nid,
+           nodemask_t *nodemask);
+ 
+ 
+ /**************** KTMM IMPLEMENTATION **********************/
+ static struct mem_cgroup *ktmm_mem_cgroup_iter(struct mem_cgroup *root, struct mem_cgroup *prev,
+         struct mem_cgroup_reclaim_cookie *reclaim) {
+   return pt_mem_cgroup_iter(root, prev, reclaim);
+ }
+ 
+ static bool ktmm_zone_watermark_ok_safe(struct zone *z, unsigned int order, unsigned long mark,
+           int highest_zoneidx) {
+   return pt_zone_watermark_ok_safe(z, order, mark, highest_zoneidx);
+ }
+ 
+ static struct pglist_data *ktmm_first_online_pgdat(void) {
+   return pt_first_online_pgdat();
+ }
+ 
+ static struct zone *ktmm_next_zone(struct zone *zone) {
+   return pt_next_zone(zone);
+ }
+ 
+ static void ktmm_free_unref_page_list(struct list_head *list) {
+   return pt_free_unref_page_list(list);
+ }
+ 
+ static void ktmm_lru_add_drain(void) {
+   pt_lru_add_drain();
+ }
+ 
+ static void ktmm_cgroup_update_lru_size(struct lruvec *lruvec, enum lru_list lru, int zid, int nr_pages) {
+   pt_cgroup_update_lru_size(lruvec, lru, zid, nr_pages);
+ }
+ 
+ static void ktmm_cgroup_uncharge_list(struct list_head *page_list) {
+   pt_cgroup_uncharge_list(page_list);
+ }
+ 
+ static unsigned long ktmm_isolate_lru_folios(unsigned long nr_to_scan, struct lruvec *lruvec,
+           struct list_head *dst, unsigned long *nr_scanned,
+           struct scan_control *sc, enum lru_list lru) {
+   return pt_isolate_lru_folios(nr_to_scan, lruvec, dst, nr_scanned, sc, lru);
+ }
+ 
+ static unsigned int ktmm_move_folios_to_lru(struct lruvec *lruvec, struct list_head *list) {
+   return pt_move_folios_to_lru(lruvec, list);
+ }
+ 
+ static void ktmm_folio_putback_lru(struct folio *folio) {
+   pt_folio_putback_lru(folio);
+ }
+ 
+ static int ktmm_folio_referenced(struct folio *folio, int is_locked, struct mem_cgroup *memcg,
+         unsigned long *vm_flags) {
+   return pt_folio_referenced(folio, is_locked, memcg, vm_flags);
+ }
+ 
+ /*****************************************************************************
+  * ALLOC & SWAP (FIXED: SAFER FLAGS)
+  *****************************************************************************/
+ 
+ struct page* alloc_pmem_page(struct  page *page, unsigned long data)
+ {
+     // FIX: Use GFP_NOIO to prevent recursion during reclaim
+   gfp_t gfp_mask = GFP_NOIO | __GFP_PMEM; 
+   return alloc_page(gfp_mask);
+ }
+ 
+ struct page* alloc_normal_page(struct page *page, unsigned long data)
+ {
+     // FIX: Use GFP_NOIO to prevent recursion during reclaim
+     gfp_t gfp_mask = GFP_NOIO;
+     return alloc_page(gfp_mask);
+ }
+ 
+ static struct page *ktmm_alloc_pages(gfp_t gfp_mask, unsigned int order, int preferred_nid,
+           nodemask_t *nodemask)
+ {
+   nodemask_t nodemask_test;
+   int nid;
+   
+   if ((gfp_mask & __GFP_PMEM) !=0) {
+     for_each_node_state(nid, N_MEMORY) {
+       if(NODE_DATA(nid)->pm_node != 0)
+         node_set(nid, nodemask_test);
+       else
+         node_clear(nid, nodemask_test);
+     }
+     nodemask = &nodemask_test;
+   }
+   else if ((gfp_mask & __GFP_PMEM) == 0 && pmem_node_id != -1) {
+     for_each_node_state(nid, N_MEMORY) {
+       if (NODE_DATA(nid)->pm_node == 0)
+         node_set(nid, nodemask_test);
+       else
+         node_clear(nid, nodemask_test);
+     }
+     nodemask = &nodemask_test;
+   }
+   return pt_alloc_pages(gfp_mask, order, preferred_nid, nodemask);
+ }
+ 
+ /*****************************************************************************
+  * Bulk Migration Worker Threads (FIXED: PF_MEMALLOC)
+  *****************************************************************************/
+ 
+ static int promote_worker_fn(void *arg)
+ {
+     // FIX: Set PF_MEMALLOC to prevent this thread from triggering reclaim
+     // This prevents the "memory deadlock" where migration waits for itself to free memory.
+     unsigned int pflags = current->flags;
+     current->flags |= PF_MEMALLOC;
+ 
+   while (!kthread_should_stop()) {
+     struct migrate_node *batch[BATCH_N];
+     int n = 0, i;
+     unsigned long flags;
+     LIST_HEAD(migrate_list);
+     unsigned int nr_succeeded = 0;
+     int ret;
+ 
+     spin_lock_irqsave(&promote_queue_lock, flags);
+     while (n < BATCH_N && !list_empty(&promote_queue)) {
+       struct migrate_node *x =
+         list_first_entry(&promote_queue, struct migrate_node, link);
+       list_del_init(&x->link);
+       atomic_dec(&promote_queue_count);
+       batch[n++] = x;
+     }
+     spin_unlock_irqrestore(&promote_queue_lock, flags);
+ 
+     if (n == 0) {
+       msleep(WORK_SLEEP_MS);
+       continue;
+     }
+ 
+     for (i = 0; i < n; i++) {
+       struct migrate_node *x = batch[i];
+       struct folio *folio = x->folio;
+       list_add_tail(&folio->lru, &migrate_list);
+       kfree(x);
+     }
+ 
+     atomic64_add(n, &mig_attempted_promote);
+ 
+     ret = migrate_pages(&migrate_list, alloc_normal_page, NULL,
+             0, MIGRATE_SYNC, MR_NUMA_MISPLACED,
+             &nr_succeeded);
+ 
+     if (nr_succeeded > 0) {
+       atomic64_add(nr_succeeded, &mig_succeeded_promote);
+       atomic64_add(nr_succeeded, &total_pages_promoted);
+       atomic64_add(nr_succeeded, &pages_promote_to_dram);
+     }
+ 
+     if (!list_empty(&migrate_list)) {
+       struct folio *folio, *next;
+       int failed = 0;
+       list_for_each_entry_safe(folio, next, &migrate_list, lru) {
+         list_del_init(&folio->lru);
+         folio_put(folio);
+         failed++;
+       }
+       atomic64_add(failed, &pages_promote_failed);
+     }
+     cond_resched();
+   }
+ 
+     // Restore flags
+     current->flags = pflags;
+   return 0;
+ }
+ 
+ static int demote_worker_fn(void *arg)
+ {
+     // FIX: Set PF_MEMALLOC to prevent recursion
+     unsigned int pflags = current->flags;
+     current->flags |= PF_MEMALLOC;
+ 
+   while (!kthread_should_stop()) {
+     struct migrate_node *batch[BATCH_N];
+     int n = 0, i;
+     unsigned long flags;
+     LIST_HEAD(migrate_list);
+     unsigned int nr_succeeded = 0;
+     int ret;
+ 
+     spin_lock_irqsave(&demote_queue_lock, flags);
+     while (n < BATCH_N && !list_empty(&demote_queue)) {
+       struct migrate_node *x =
+         list_first_entry(&demote_queue, struct migrate_node, link);
+       list_del_init(&x->link);
+       atomic_dec(&demote_queue_count);
+       batch[n++] = x;
+     }
+     spin_unlock_irqrestore(&demote_queue_lock, flags);
+ 
+     if (n == 0) {
+       msleep(WORK_SLEEP_MS);
+       continue;
+     }
+ 
+     for (i = 0; i < n; i++) {
+       struct migrate_node *x = batch[i];
+       struct folio *folio = x->folio;
+       list_add_tail(&folio->lru, &migrate_list);
+       kfree(x);
+     }
+ 
+     atomic64_add(n, &mig_attempted_demote);
+ 
+     ret = migrate_pages(&migrate_list, alloc_pmem_page, NULL,
+             0, MIGRATE_SYNC, MR_NUMA_MISPLACED,
+             &nr_succeeded);
+ 
+     if (nr_succeeded > 0) {
+       atomic64_add(nr_succeeded, &mig_succeeded_demote);
+       atomic64_add(nr_succeeded, &total_pages_demoted);
+     }
+ 
+     if (!list_empty(&migrate_list)) {
+       struct folio *folio, *next;
+       list_for_each_entry_safe(folio, next, &migrate_list, lru) {
+         list_del_init(&folio->lru);
+         folio_put(folio);
+       }
+     }
+     cond_resched();
+   }
+ 
+     current->flags = pflags;
+   return 0;
+ }
+ 
+ static int queue_folio_for_promote(struct folio *folio)
+ {
+   struct migrate_node *n;
+   unsigned long flags;
+ 
+   n = kmalloc(sizeof(*n), GFP_ATOMIC);
+   if (!n) return -ENOMEM;
+ 
+   INIT_LIST_HEAD(&n->link);
+   folio_get(folio);
+   n->folio = folio;
+ 
+   spin_lock_irqsave(&promote_queue_lock, flags);
+   list_add_tail(&n->link, &promote_queue);
+   atomic_inc(&promote_queue_count);
+   spin_unlock_irqrestore(&promote_queue_lock, flags);
+ 
+   atomic64_inc(&pages_queued_promote);
+   return 0;
+ }
+ 
+ static int queue_folio_for_demote(struct folio *folio)
+ {
+   struct migrate_node *n;
+   unsigned long flags;
+ 
+   n = kmalloc(sizeof(*n), GFP_ATOMIC);
+   if (!n) return -ENOMEM;
+ 
+   INIT_LIST_HEAD(&n->link);
+   folio_get(folio);
+   n->folio = folio;
+ 
+   spin_lock_irqsave(&demote_queue_lock, flags);
+   list_add_tail(&n->link, &demote_queue);
+   atomic_inc(&demote_queue_count);
+   spin_unlock_irqrestore(&demote_queue_lock, flags);
+ 
+   atomic64_inc(&pages_queued_demote);
+   return 0;
+ }
+ 
+ /*****************************************************************************
+  * Scanning
+  *****************************************************************************/
+ 
+ static bool ktmm_cgroup_below_low(struct mem_cgroup *memcg) {
+   return READ_ONCE(memcg->memory.elow) >= page_counter_read(&memcg->memory);
+ }
+ 
+ static bool ktmm_cgroup_below_min(struct mem_cgroup *memcg) {
+   return READ_ONCE(memcg->memory.emin) >= page_counter_read(&memcg->memory);
+ }
+ 
+ static __always_inline void ktmm_update_lru_sizes(struct lruvec *lruvec,
+       enum lru_list lru, unsigned long *nr_zone_taken) {
+   int zid;
+   for (zid = 0; zid < MAX_NR_ZONES; zid++) {
+     if (!nr_zone_taken[zid]) continue;
+     ktmm_cgroup_update_lru_size(lruvec, lru, zid, -nr_zone_taken[zid]);
+   }
+ }
+ 
+ static inline bool ktmm_folio_evictable(struct folio *folio) {
+   bool ret;
+   rcu_read_lock();
+   ret = !mapping_unevictable(folio_mapping(folio)) && !folio_test_mlocked(folio);
+   rcu_read_unlock();
+   return ret;
+ }
+ 
+ static inline bool ktmm_folio_needs_release(struct folio *folio) {
+   struct address_space *mapping = folio_mapping(folio);
+   return folio_has_private(folio) || (mapping && mapping_release_always(mapping));
+ }
+ 
+ static __always_inline bool is_file_folio(struct folio *folio) {
+   if (folio_test_anon(folio)) return false;
+   if (folio_test_hugetlb(folio) || folio_test_large(folio)) return false;
+   if (!folio_mapping(folio)) return false;
+   if (!folio_mapping(folio)->host) return false;
+   return true;
+ }
+ 
+ static void scan_promote_list(unsigned long nr_to_scan, struct lruvec *lruvec,
+         struct scan_control *sc, enum lru_list lru,
+         struct pglist_data *pgdat)
+ {
+   unsigned long nr_taken;
+   unsigned long nr_scanned;
+   unsigned long nr_queued = 0;
+   isolate_mode_t isolate_mode = 0;
+   LIST_HEAD(l_hold);
+   LIST_HEAD(l_putback);
+   int file = is_file_lru(lru);
+   int nid = pgdat->node_id;
+ 
+   struct list_head *src = &lruvec->lists[lru];
+ 
+   if (list_empty(src)) return;
+ 
+   if (!sc->may_unmap)
+     isolate_mode |= ISOLATE_UNMAPPED;
+ 
+   ktmm_lru_add_drain();
+ 
+   spin_lock_irq(&lruvec->lru_lock);
+   nr_taken = ktmm_isolate_lru_folios(nr_to_scan, lruvec, &l_hold,
+           &nr_scanned, sc, lru);
+   __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
+   spin_unlock_irq(&lruvec->lru_lock);
+ 
+   atomic64_add(nr_taken, &pages_scanned_promote);
+ 
+   if (nr_taken > 0) {
+     struct folio *folio, *next;
+     list_for_each_entry_safe(folio, next, &l_hold, lru) {
+       if (!is_file_folio(folio)) {
+         atomic64_inc(&pages_promote_failed);
+         list_move(&folio->lru, &l_putback);
+         continue;
+       }
+       list_del_init(&folio->lru);
+ 
+       if (queue_folio_for_promote(folio) == 0) {
+         nr_queued++;
+         atomic64_inc(&pages_active_to_promote);
+       } else {
+         list_add(&folio->lru, &l_putback);
+         atomic64_inc(&pages_promote_failed);
+       }
+     }
+   }
+     
+   spin_lock_irq(&lruvec->lru_lock);
+   ktmm_move_folios_to_lru(lruvec, &l_hold);
+   ktmm_move_folios_to_lru(lruvec, &l_putback);
+   __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
+   spin_unlock_irq(&lruvec->lru_lock);
+ 
+   ktmm_cgroup_uncharge_list(&l_hold);
+   ktmm_free_unref_page_list(&l_hold);
+   ktmm_cgroup_uncharge_list(&l_putback);
+   ktmm_free_unref_page_list(&l_putback);
+ }
+ 
+ 
+ static void scan_active_list(unsigned long nr_to_scan, struct lruvec *lruvec,
+         struct scan_control *sc, enum lru_list lru,
+         struct pglist_data *pgdat)
+ {
+   unsigned long nr_taken;
+   unsigned long nr_scanned;
+   unsigned long vm_flags;
+   LIST_HEAD(l_hold);
+   LIST_HEAD(l_active);
+   LIST_HEAD(l_inactive);
+   LIST_HEAD(l_promote);
+   unsigned nr_deactivate, nr_activate, nr_promote;
+   unsigned nr_rotated = 0;
+   int file = is_file_lru(lru);
+   
+   ktmm_lru_add_drain();
+ 
+   spin_lock_irq(&lruvec->lru_lock);
+   nr_taken = ktmm_isolate_lru_folios(nr_to_scan, lruvec, &l_hold,
+              &nr_scanned, sc, lru);
+   __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
+   spin_unlock_irq(&lruvec->lru_lock);
+ 
+   atomic64_add(nr_taken, &pages_scanned_active);
+ 
+   while (!list_empty(&l_hold)) {
+     struct folio *folio;
+ 
+     cond_resched();
+     folio = lru_to_folio(&l_hold);
+     list_del(&folio->lru);
+ 
+     if (unlikely(!ktmm_folio_evictable(folio))) {
+       ktmm_folio_putback_lru(folio);
+       continue;
+     }
+ 
+     if (unlikely(buffer_heads_over_limit)) {
+       if (ktmm_folio_needs_release(folio) &&
+           folio_trylock(folio)) {
+         filemap_release_folio(folio, 0);
+         folio_unlock(folio);
+       }
+     }
+ 
+     if (pgdat->pm_node != 0) {
+       if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
+         folio_set_promote(folio);
+         list_add(&folio->lru, &l_promote);
+         atomic64_inc(&pages_active_to_promote);
+         continue;
+       }
+     }
+ 
+     if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags) != 0) {
+       if ((vm_flags & VM_EXEC) && folio_is_file_lru(folio)) {
+         nr_rotated += folio_nr_pages(folio);
+         list_add(&folio->lru, &l_active);
+         continue;
+       }
+     }
+ 
+     folio_clear_active(folio);
+     folio_set_workingset(folio);
+     list_add(&folio->lru, &l_inactive);
+     atomic64_inc(&pages_active_to_inactive);
+   }
+ 
+   spin_lock_irq(&lruvec->lru_lock);
+   nr_activate = ktmm_move_folios_to_lru(lruvec, &l_active);
+   nr_deactivate = ktmm_move_folios_to_lru(lruvec, &l_inactive);
+   nr_promote = ktmm_move_folios_to_lru(lruvec, &l_promote);
+   list_splice(&l_inactive, &l_active);
+   __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
+   spin_unlock_irq(&lruvec->lru_lock);
+ 
+   ktmm_cgroup_uncharge_list(&l_active);
+   ktmm_free_unref_page_list(&l_active);
+ }
+ 
+ static unsigned long scan_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
+           struct scan_control *sc, enum lru_list lru,
+           struct pglist_data *pgdat)
+ {
+   LIST_HEAD(folio_list);
+   LIST_HEAD(l_active);
+   LIST_HEAD(l_putback);
+   unsigned long nr_scanned;
+   unsigned long nr_taken = 0;
+   unsigned long nr_queued = 0;
+   unsigned long nr_activate = 0;
+   unsigned long vm_flags;
+   bool file = is_file_lru(lru);
+   int nid = pgdat->node_id;
+ 
+   ktmm_lru_add_drain();
+ 
+   spin_lock_irq(&lruvec->lru_lock);
+   nr_taken = ktmm_isolate_lru_folios(nr_to_scan, lruvec, &folio_list,
+              &nr_scanned, sc, lru);
+   __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
+   spin_unlock_irq(&lruvec->lru_lock);
+ 
+   if (nr_taken == 0) return 0;
+ 
+   atomic64_add(nr_taken, &pages_scanned_inactive);
+ 
+   if (pgdat->pm_node != 0) {
+     struct folio *folio, *next;
+     list_for_each_entry_safe(folio, next, &folio_list, lru) {
+       if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
+         list_del(&folio->lru);
+         folio_set_active(folio);
+         list_add(&folio->lru, &l_active);
+         nr_activate++;
+         atomic64_inc(&pages_inactive_to_active);
+       }
+     }
+   }
+ 
+   if (pgdat->pm_node == 0 && pmem_node_id != -1) {
+     struct folio *folio, *next;
+     list_for_each_entry_safe(folio, next, &folio_list, lru) {
+       if (!is_file_folio(folio)) {
+         list_move(&folio->lru, &l_putback);
+         continue;
+       }
+       list_del_init(&folio->lru);
+       if (queue_folio_for_demote(folio) == 0) {
+         nr_queued++;
+       } else {
+         list_add(&folio->lru, &l_putback);
+       }
+     }
+   }
+   
+   spin_lock_irq(&lruvec->lru_lock);
+   if (nr_activate > 0) ktmm_move_folios_to_lru(lruvec, &l_active);
+   ktmm_move_folios_to_lru(lruvec, &folio_list);
+   ktmm_move_folios_to_lru(lruvec, &l_putback);
+   __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
+   spin_unlock_irq(&lruvec->lru_lock);
+ 
+   ktmm_cgroup_uncharge_list(&l_active);
+   ktmm_free_unref_page_list(&l_active);
+   ktmm_cgroup_uncharge_list(&folio_list);
+   ktmm_free_unref_page_list(&folio_list);
+   ktmm_cgroup_uncharge_list(&l_putback);
+   ktmm_free_unref_page_list(&l_putback);
+ 
+   return nr_queued;
+ }
+ 
+ static unsigned long scan_list(enum lru_list lru, unsigned long nr_to_scan,
+         struct lruvec *lruvec, struct scan_control *sc,
+         struct pglist_data *pgdat)
+ {
+   if (is_active_lru(lru)) scan_active_list(nr_to_scan, lruvec, sc, lru, pgdat);
+   if(is_promote_lru(lru)) scan_promote_list(nr_to_scan, lruvec, sc, lru, pgdat);
+   return scan_inactive_list(nr_to_scan, lruvec, sc, lru, pgdat);
+ }
+ 
+ static void scan_node(pg_data_t *pgdat, struct scan_control *sc,
+     struct mem_cgroup_reclaim_cookie *reclaim)
+ {
+   enum lru_list lru;
+   struct mem_cgroup *memcg;
+   int nid = pgdat->node_id;
+   
+   memset(&sc->nr, 0, sizeof(sc->nr));
+   memcg = ktmm_mem_cgroup_iter(NULL, NULL, reclaim);
+   sc->target_mem_cgroup = memcg;
+ 
+   do {
+     struct lruvec *lruvec = &memcg->nodeinfo[nid]->lruvec;
+ 
+     if (ktmm_cgroup_below_min(memcg)) continue;
+     else if (ktmm_cgroup_below_low(memcg)) {
+       if (!sc->memcg_low_reclaim) {
+         sc->memcg_low_skipped = 1;
+         continue;
+       }
+     }
+ 
+     for_each_evictable_lru(lru) {
+       unsigned long nr_to_scan = 1024; 
+       scan_list(lru, nr_to_scan, lruvec, sc, pgdat);
+     }
+         
+         // FIX: Add cond_resched() to prevent soft lockups during long scans
+         cond_resched();
+ 
+   } while ((memcg = ktmm_mem_cgroup_iter(NULL, memcg, NULL)));
+ }
+ 
+ 
+ /*****************************************************************************
+  * Daemon Functions & Related
+  *****************************************************************************/
+ 
+ static void tmemd_try_to_sleep(pg_data_t *pgdat, int nid)
+ {
+   long remaining = 0;
+   DEFINE_WAIT(wait);
+ 
+   if (freezing(current) || kthread_should_stop()) return;
+   
+   prepare_to_wait(&tmemd_wait[nid], &wait, TASK_INTERRUPTIBLE);
+   remaining = schedule_timeout(5 * HZ); 
+   finish_wait(&tmemd_wait[nid], &wait);
+ }
+ 
+ static int tmemd(void *p) 
+ {
+   pg_data_t *pgdat = (pg_data_t *)p;
+   int nid = pgdat->node_id;
+   struct task_struct *task = current;
+   const struct cpumask *cpumask = cpumask_of_node(nid);
+ 
+   struct mem_cgroup_reclaim_cookie reclaim = {
+     .pgdat = pgdat,
+   };
+ 
+   struct reclaim_state reclaim_state = {
+     .reclaimed_slab = 0,
+   };
+ 
+   struct scan_control sc = {
+     .nr_to_reclaim = SWAP_CLUSTER_MAX,
+     .priority = DEF_PRIORITY,
+     .may_writepage = !laptop_mode, 
+     .may_unmap = 1,
+     .may_swap = 1,
+     .reclaim_idx = MAX_NR_ZONES - 1,
+     .only_promote = 1,
+   };
+ 
+   if(!cpumask_empty(cpumask))
+     set_cpus_allowed_ptr(task, cpumask);
+ 
+   current->reclaim_state = &reclaim_state;
+   task->flags |= PF_MEMALLOC | PF_KSWAPD;
+ 
+   for ( ; ; )
+   {
+     scan_node(pgdat, &sc, &reclaim);
+     if (kthread_should_stop()) break;
+     tmemd_try_to_sleep(pgdat, nid);
+   }
+ 
+   task->flags &= ~(PF_MEMALLOC | PF_KSWAPD);
+   current->reclaim_state = NULL;
+   return 0;
+ }
+ 
+ /*****************************************************************************
+  * Start & Stop
+  *****************************************************************************/
+ 
+ static struct ktmm_hook vmscan_hooks[] = {
+   HOOK("mem_cgroup_iter", ktmm_mem_cgroup_iter, &pt_mem_cgroup_iter),
+   HOOK("zone_watermark_ok", ktmm_zone_watermark_ok_safe, &pt_zone_watermark_ok_safe),
+   HOOK("first_online_pgdat", ktmm_first_online_pgdat, &pt_first_online_pgdat),
+   HOOK("next_zone", ktmm_next_zone, &pt_next_zone),
+   HOOK("free_unref_page_list", ktmm_free_unref_page_list, &pt_free_unref_page_list),
+   HOOK("lru_add_drain", ktmm_lru_add_drain, &pt_lru_add_drain),
+   HOOK("mem_cgroup_update_lru_size", ktmm_cgroup_update_lru_size, &pt_cgroup_update_lru_size),
+   HOOK("__mem_cgroup_uncharge_list", ktmm_cgroup_uncharge_list, &pt_cgroup_uncharge_list),
+   HOOK("isolate_lru_folios", ktmm_isolate_lru_folios, &pt_isolate_lru_folios),
+   HOOK("move_folios_to_lru", ktmm_move_folios_to_lru, &pt_move_folios_to_lru),
+   HOOK("folio_putback_lru", ktmm_folio_putback_lru, &pt_folio_putback_lru),
+   HOOK("folio_referenced", ktmm_folio_referenced, &pt_folio_referenced),
+   HOOK("__alloc_pages", ktmm_alloc_pages, &pt_alloc_pages),
+ };
+ 
+ static void drain_migration_queues(void)
+ {
+   struct migrate_node *n;
+   unsigned long flags;
+ 
+   while (1) {
+     spin_lock_irqsave(&promote_queue_lock, flags);
+     if (list_empty(&promote_queue)) {
+       spin_unlock_irqrestore(&promote_queue_lock, flags);
+       break;
+     }
+     n = list_first_entry(&promote_queue, struct migrate_node, link);
+     list_del_init(&n->link);
+     atomic_dec(&promote_queue_count);
+     spin_unlock_irqrestore(&promote_queue_lock, flags);
+     folio_put(n->folio);
+     kfree(n);
+   }
+ 
+   while (1) {
+     spin_lock_irqsave(&demote_queue_lock, flags);
+     if (list_empty(&demote_queue)) {
+       spin_unlock_irqrestore(&demote_queue_lock, flags);
+       break;
+     }
+     n = list_first_entry(&demote_queue, struct migrate_node, link);
+     list_del_init(&n->link);
+     atomic_dec(&demote_queue_count);
+     spin_unlock_irqrestore(&demote_queue_lock, flags);
+     folio_put(n->folio);
+     kfree(n);
+   }
+ }
+ 
+ int tmemd_start_available(void) 
+ {
+   int i;
+   int nid;
+   int ret;
+ 
+   set_ktmm_scan();
+ 
+   for (i = 0; i < MAX_NUMNODES; i++)
+     init_waitqueue_head(&tmemd_wait[i]);
+ 
+   ret = install_hooks(vmscan_hooks, ARRAY_SIZE(vmscan_hooks));
+ 
+   timer_setup(&page_stats_timer, page_stats_timer_callback, 0);
+   mod_timer(&page_stats_timer, jiffies + 5 * HZ);
+ 
+   promote_worker_task = kthread_run(promote_worker_fn, NULL, "ktmm_promote_worker");
+   if (IS_ERR(promote_worker_task)) {
+     promote_worker_task = NULL;
+     pr_err("ktmm: failed to start promote_worker thread\n");
+   }
+ 
+   demote_worker_task = kthread_run(demote_worker_fn, NULL, "ktmm_demote_worker");
+   if (IS_ERR(demote_worker_task)) {
+     demote_worker_task = NULL;
+     pr_err("ktmm: failed to start demote_worker thread\n");
+   }
+   
+   for_each_online_node(nid)
+   {
+     pg_data_t *pgdat = NODE_DATA(nid);
+ 
+     if (nid == 1) {
+       pr_info("Emulating pmem node");
+       set_pmem_node_id(nid);
+       set_pmem_node(nid);
+     }
+         tmemd_list[nid] = kthread_run(&tmemd, pgdat, "tmemd");
+   }
+ 
+   return ret;
+ }
+ 
+ void tmemd_stop_all(void)
+ {
+   int nid;
+ 
+   del_timer_sync(&page_stats_timer);
+ 
+   if (promote_worker_task) {
+     kthread_stop(promote_worker_task);
+     promote_worker_task = NULL;
+   }
+ 
+   if (demote_worker_task) {
+     kthread_stop(demote_worker_task);
+     demote_worker_task = NULL;
+   }
+ 
+   drain_migration_queues();
+ 
+   for_each_online_node(nid)
+   {
+     kthread_stop(tmemd_list[nid]);
+   }
+ 
+   uninstall_hooks(vmscan_hooks, ARRAY_SIZE(vmscan_hooks));
+ }
