@@ -1,5 +1,5 @@
 /* =========================
- * ktmm_vmscan.c (Fixed Promotion Logic)
+ * ktmm_vmscan.c (Fixed: Active Reference Checks for Promotion)
  * ========================= */
 
  #include <linux/atomic.h>
@@ -170,16 +170,8 @@
          }
          spin_unlock(&page_access_lock);
          
-         printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, curr=%lu, first=%lu, age=%lu) ***\n",
-                  location, folio, node_type, current_jiffies, first_access_jiffies, 
-                  (current_jiffies - first_access_jiffies));
-         
-         /* !! CRITICAL FIX !! 
-          * Do NOT clear the referenced bit here. 
-          * If we clear it, the promotion logic later in scan_active_list 
-          * will see '0' and assume the page is cold.
-          */
-         // folio_clear_referenced(folio);  <-- DELETED
+         // Log access without clearing bit
+         // printk(KERN_INFO "*** ACCESSED %s ***\n", location);
      } 
      return was_accessed;
  }
@@ -229,9 +221,6 @@
  /*****************************************************************************
   * Local Implementation of uts_migrate_file_pages_bulk_vec
   *****************************************************************************/
- /*
-  * uts_migrate_file_pages_bulk_vec - Local implementation of the missing kernel API.
-  */
  static int uts_migrate_file_pages_bulk_vec(struct page **pages, int nr_pages, int target_nid)
  {
    LIST_HEAD(pagelist);
@@ -384,13 +373,6 @@
    __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
    spin_unlock_irq(&lruvec->lru_lock);
  
-   if (!list_empty(&l_hold)) {
-     struct folio *folio, *next;
-     list_for_each_entry_safe(folio, next, &l_hold, lru) {
-       track_folio_access(folio, pgdat, "PROMOTE_LIST");
-     }
-   }
- 
    /* PROMOTE PMEM -> DRAM (Node 0) */
    if (nr_taken) {
      int target_node = 0; 
@@ -448,9 +430,6 @@
      folio = lru_to_folio(&l_hold);
      list_del(&folio->lru);
  
-     /* We check access here, but we removed folio_clear_referenced so the flag remains! */
-     track_folio_access(folio, pgdat, "ACTIVE_LIST");
- 
      if (unlikely(!ktmm_folio_evictable(folio))) {
        ktmm_folio_putback_lru(folio);
        continue;
@@ -464,7 +443,7 @@
      }
  
      if (pgdat->pm_node != 0) {
-       /* Now this check will actually work because the bit wasn't cleared */
+       /* Active references are caught here */
        if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
          folio_set_promote(folio);
          list_add(&folio->lru, &l_promote);
@@ -504,11 +483,12 @@
            struct pglist_data *pgdat)
  {
    LIST_HEAD(folio_list);
-   LIST_HEAD(l_promote); /* ADDED for promotion from inactive */
+   LIST_HEAD(l_promote); 
    unsigned long nr_scanned;
    unsigned long nr_taken = 0;
    unsigned long nr_migrated = 0;
    unsigned long nr_promote_moved = 0;
+   unsigned long vm_flags; /* REQUIRED for checking references */
    bool file = is_file_lru(lru);
  
    ktmm_lru_add_drain();
@@ -523,20 +503,16 @@
    if (!list_empty(&folio_list)) {
      struct folio *folio, *next;
      list_for_each_entry_safe(folio, next, &folio_list, lru) {
-       track_folio_access(folio, pgdat, "INACTIVE_LIST");
- 
-       /* !! CRITICAL FIX FOR PROMOTION !! 
-        * If we are on PMEM (Node != 0) and the page is referenced,
-        * we MUST move it to the promote list or active list.
-        * Otherwise, hot pages demoted to inactive will starve here.
-        */
+       
+       /* !! ACTIVE CHECK !! */
+       /* On PMEM, force an rmap walk to find hardware-accessed pages */
        if (pgdat->pm_node != 0) {
-         if (folio_test_referenced(folio)) {
-           // Logic: If accessed in inactive, it is HOT.
+         if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
            folio_set_promote(folio);
            list_move(&folio->lru, &l_promote);
+           continue;
          }
-       }
+       } 
      }
    }
  
@@ -546,26 +522,22 @@
      
      if (nr_migrated > 0) {
        atomic64_add(nr_migrated, &total_demoted_count);
-       printk(KERN_INFO "KTMM: DEMOTED %lu pages (Node %d -> Node %d)\n", 
-              nr_migrated, pgdat->node_id, pmem_node_id);
      }
      __mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
    }
  
-   /* Handle any pages we decided to Promote from Inactive (On PMEM) */
+   /* Move Promoted Pages to Promote List */
    if (!list_empty(&l_promote)) {
      spin_lock_irq(&lruvec->lru_lock);
      nr_promote_moved = ktmm_move_folios_to_lru(lruvec, &l_promote);
-     /* We moved them to the promote list, so we reduce the count of isolated */
      __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_promote_moved);
      spin_unlock_irq(&lruvec->lru_lock);
      
-     /* If there are any leftovers in l_promote (unlikely), clean them */
      ktmm_cgroup_uncharge_list(&l_promote);
      ktmm_free_unref_page_list(&l_promote);
    }
  
-   /* Cleanup remaining folios */
+   /* Put back remaining inactive pages */
    if (!list_empty(&folio_list)) {
      spin_lock_irq(&lruvec->lru_lock);
      ktmm_move_folios_to_lru(lruvec, &folio_list);
@@ -574,7 +546,6 @@
      ktmm_cgroup_uncharge_list(&folio_list);
      ktmm_free_unref_page_list(&folio_list);
    } else {
-     // If everything was promoted/migrated, just ensure stats are balanced
      if (nr_taken > nr_promote_moved)
        __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -(nr_taken - nr_promote_moved));
    }
