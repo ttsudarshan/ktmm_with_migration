@@ -1,5 +1,5 @@
 /* =========================
- * ktmm_vmscan.c (Fixed for Kernel 6.1 + Linker Bypass)
+ * ktmm_vmscan.c (Kernel 6.1 + Stats & Verification Logs)
  * ========================= */
 
 //#define pr_fmt(fmt) "[ KTMM Mod ] vmscan - " fmt
@@ -58,10 +58,11 @@ wait_queue_head_t tmemd_wait[MAX_NUMNODES];
 static atomic64_t mig_attempted = ATOMIC64_INIT(0);
 static atomic64_t mig_succeeded = ATOMIC64_INIT(0);
 
-/* * DYNAMIC LOOKUP FOR BULK API 
- * We use a function pointer to avoid linker errors if the symbol 
- * isn't explicitly exported by the kernel.
- */
+/* ** ADDED: Global Stats Counters ** */
+static atomic64_t total_promoted_count = ATOMIC64_INIT(0);
+static atomic64_t total_demoted_count = ATOMIC64_INIT(0);
+
+/* DYNAMIC LOOKUP FOR BULK API */
 typedef int (*uts_migrate_vec_t)(struct page **pages, int nr_pages, int target_nid);
 static uts_migrate_vec_t pt_uts_migrate_file_pages_bulk_vec = NULL;
 
@@ -253,7 +254,6 @@ static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, co
         }
         spin_unlock(&page_access_lock);
         
-        /* FIXED: Added 'access_age=%lu' to the format string to match the arguments */
         printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, current_jiffies=%lu, first_access_jiffies=%lu, access_age=%lu) ***\n",
                  location, folio, node_type, current_jiffies, first_access_jiffies, 
                  (current_jiffies - first_access_jiffies));
@@ -311,9 +311,6 @@ static struct page *ktmm_alloc_pages(gfp_t gfp_mask, unsigned int order, int pre
  * Bulk Migration Helper (Resolved Dynamically)
  *****************************************************************************/
 
-/**
- * migrate_folios_bulk - Migrate a list of folios using the bulk vector API
- */
 static unsigned long migrate_folios_bulk(struct list_head *folio_list, int target_nid)
 {
 	struct page *vec[BATCH_N];
@@ -324,9 +321,7 @@ static unsigned long migrate_folios_bulk(struct list_head *folio_list, int targe
 	if (list_empty(folio_list))
 		return 0;
 
-	/* If we failed to resolve the function, abort */
 	if (!pt_uts_migrate_file_pages_bulk_vec) {
-		/* Warn once to avoid log spam */
 		static bool warned = false;
 		if (!warned) {
 			pr_err("KTMM: uts_migrate_file_pages_bulk_vec symbol missing. Migration disabled.\n");
@@ -335,27 +330,17 @@ static unsigned long migrate_folios_bulk(struct list_head *folio_list, int targe
 		return 0;
 	}
 
-	/* Iterate through the list of isolated folios */
 	list_for_each_entry_safe(folio, next, folio_list, lru) {
 		struct page *page = folio_page(folio, 0);
 
-		/* Add to batch */
 		vec[n++] = page;
-		
-		/* Remove from the hold list so we can process the batch */
 		list_del_init(&folio->lru);
 
-		/* If batch is full, execute migration */
 		if (n == BATCH_N) {
 			int ret;
-			
 			atomic64_add(n, &mig_attempted);
-			
 			ret = pt_uts_migrate_file_pages_bulk_vec(vec, n, target_nid);
 
-			/* * If migration failed for specific pages (vec[i] != NULL),
-			 * put them back on LRU.
-			 */
 			for (i = 0; i < n; i++) {
 				if (vec[i]) {
 					ktmm_folio_putback_lru(page_folio(vec[i]));
@@ -367,16 +352,13 @@ static unsigned long migrate_folios_bulk(struct list_head *folio_list, int targe
 				atomic64_add(success_count, &mig_succeeded);
 				nr_migrated += success_count;
 			}
-			
-			n = 0; /* Reset batch */
+			n = 0; 
 		}
 	}
 
-	/* Process remaining items in the batch */
 	if (n > 0) {
 		int ret;
 		atomic64_add(n, &mig_attempted);
-		
 		ret = pt_uts_migrate_file_pages_bulk_vec(vec, n, target_nid);
 
 		for (i = 0; i < n; i++) {
@@ -456,7 +438,6 @@ static void scan_promote_list(unsigned long nr_to_scan,
 	isolate_mode_t isolate_mode = 0;
 	LIST_HEAD(l_hold);
 	int file = is_file_lru(lru);
-	//int nid = pgdat->node_id;
 
 	struct list_head *src = &lruvec->lists[lru];
 
@@ -469,11 +450,9 @@ static void scan_promote_list(unsigned long nr_to_scan,
 	ktmm_lru_add_drain();
 
 	spin_lock_irq(&lruvec->lru_lock);
-
 	nr_taken = ktmm_isolate_lru_folios(nr_to_scan, lruvec, &l_hold,
 					&nr_scanned, sc, lru);
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
-
 	spin_unlock_irq(&lruvec->lru_lock);
 
 	/* Track access patterns */
@@ -489,6 +468,13 @@ static void scan_promote_list(unsigned long nr_to_scan,
 		int target_node = 0; /* Hardcoded to DRAM for promotion */
 		
 		nr_migrated = migrate_folios_bulk(&l_hold, target_node);
+		
+		/* ** ADDED: Stats & Printk ** */
+		if (nr_migrated > 0) {
+			atomic64_add(nr_migrated, &total_promoted_count);
+			printk(KERN_INFO "KTMM: PROMOTED %lu pages (Node %d -> Node %d)\n", 
+			       nr_migrated, pgdat->node_id, target_node);
+		}
 		
 		__mod_node_page_state(pgdat, NR_PROMOTED, nr_migrated);
 	}
@@ -614,7 +600,6 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	unsigned long nr_taken = 0;
 	unsigned long nr_migrated = 0;
 	bool file = is_file_lru(lru);
-	//int nid = pgdat->node_id;
 
 	ktmm_lru_add_drain();
 
@@ -636,6 +621,14 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	/* * BULK MIGRATION IMPLEMENTATION (Demote DRAM -> PMEM) */
 	if (pgdat->pm_node == 0 && pmem_node_id != -1) {
 		nr_migrated = migrate_folios_bulk(&folio_list, pmem_node_id);
+		
+		/* ** ADDED: Stats & Printk ** */
+		if (nr_migrated > 0) {
+			atomic64_add(nr_migrated, &total_demoted_count);
+			printk(KERN_INFO "KTMM: DEMOTED %lu pages (Node %d -> Node %d)\n", 
+			       nr_migrated, pgdat->node_id, pmem_node_id);
+		}
+		
 		__mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
 	}
 
@@ -715,8 +708,11 @@ static void scan_node(pg_data_t *pgdat,
 	scan_end_time = ktime_get_ns();
 	total_scan_time_us = (scan_end_time - scan_start_time) / 1000;
 	
-	printk(KERN_INFO "*** SCAN_STATS (Node %d): Total Pages Scanned: %lu, Total Scan Time: %llu us ***\n", 
-	       nid, total_pages_scanned, total_scan_time_us);
+	/* ** FIXED: Added Total Promoted/Demoted Stats to Printk ** */
+	printk(KERN_INFO "*** SCAN_STATS (Node %d): Total Pages Scanned: %lu, Time: %llu us, Total Promoted: %lld, Total Demoted: %lld ***\n", 
+	       nid, total_pages_scanned, total_scan_time_us,
+	       (long long)atomic64_read(&total_promoted_count),
+	       (long long)atomic64_read(&total_demoted_count));
 }
 
 
@@ -807,7 +803,6 @@ static struct ktmm_hook vmscan_hooks[] = {
 	HOOK("__alloc_pages", ktmm_alloc_pages, &pt_alloc_pages),
 };
 
-/* Helper to lookup symbols even if they are not exported (Bypassing modpost checks) */
 static unsigned long lookup_external_symbol(const char *name)
 {
 	struct kprobe kp = {
@@ -834,7 +829,6 @@ int tmemd_start_available(void)
 	hash_init(page_access_hash);
 	printk(KERN_INFO "Page access tracking hashtable initialized\n");
 
-	/* Resolve the bulk migration API dynamically */
 	pt_uts_migrate_file_pages_bulk_vec = (uts_migrate_vec_t)lookup_external_symbol("uts_migrate_file_pages_bulk_vec");
 	if (!pt_uts_migrate_file_pages_bulk_vec) {
 		pr_err("KTMM Error: Could not resolve 'uts_migrate_file_pages_bulk_vec'. Migration will be disabled.\n");
