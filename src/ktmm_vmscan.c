@@ -2,7 +2,7 @@
  * ktmm_vmscan.c
  *
  * Page scanning and related functions.
- * Implements Bulk Migration (Scanner -> Queue -> Worker)
+ * Implements Aggressive Bulk Migration for Kernel 6.1
  */
 
  #include <linux/atomic.h>
@@ -88,8 +88,8 @@
  static atomic64_t total_pages_promoted = ATOMIC64_INIT(0);
  static atomic64_t total_pages_demoted = ATOMIC64_INIT(0);
  static atomic64_t pages_scanned_inactive = ATOMIC64_INIT(0);
- static atomic64_t pages_scanned_active = ATOMIC64_INIT(0);
- static atomic64_t pages_scanned_promote = ATOMIC64_INIT(0);
+ static atomic64_t pages_queued_promote = ATOMIC64_INIT(0);
+ static atomic64_t pages_queued_demote = ATOMIC64_INIT(0);
  
  static struct timer_list page_stats_timer;
  
@@ -99,10 +99,11 @@
    u64 demoted = atomic64_read(&total_pages_demoted);
    u64 promote_q = atomic_read(&promote_queue_count);
    u64 demote_q = atomic_read(&demote_queue_count);
-     u64 scan_in = atomic64_read(&pages_scanned_inactive);
+   u64 scan_in = atomic64_read(&pages_scanned_inactive);
+   u64 q_dem = atomic64_read(&pages_queued_demote);
  
-   printk(KERN_INFO "KTMM STATS: Promoted=%llu Demoted=%llu | Scanned(In)=%llu | Queues: P=%llu D=%llu\n",
-          promoted, demoted, scan_in, promote_q, demote_q);
+   printk(KERN_INFO "KTMM STATS: Promoted=%llu Demoted=%llu | Scanned(In)=%llu | QueueAttmpt(D)=%llu | Qs: P=%llu D=%llu\n",
+          promoted, demoted, scan_in, q_dem, promote_q, demote_q);
  
    mod_timer(&page_stats_timer, jiffies + 5 * HZ);
  }
@@ -186,19 +187,18 @@
  }
  
  /*****************************************************************************
-  * ALLOCATORS (CRITICAL FIX FOR FREEZE)
+  * ALLOCATORS
   *****************************************************************************/
  
  struct page* alloc_pmem_page(struct  page *page, unsigned long data)
  {
-     // Use GFP_NOIO to ensure migration doesn't wait on IO (which causes freezes)
+     // Use GFP_NOIO to ensure migration doesn't wait on IO
    gfp_t gfp_mask = GFP_NOIO | __GFP_PMEM; 
    return alloc_page(gfp_mask);
  }
  
  struct page* alloc_normal_page(struct page *page, unsigned long data)
  {
-     // Use GFP_NOIO for DRAM allocation as well during migration
      gfp_t gfp_mask = GFP_NOIO;
      return alloc_page(gfp_mask);
  }
@@ -231,13 +231,12 @@
  }
  
  /*****************************************************************************
-  * WORKER THREADS (CRITICAL FIX FOR FREEZE)
+  * WORKER THREADS (Bulk Migration)
   *****************************************************************************/
  
  static int promote_worker_fn(void *arg)
  {
-     // CRITICAL FIX: Mark this thread as a memory reclaimer (PF_MEMALLOC)
-     // This prevents it from getting stuck waiting for memory when system is low.
+     // Important: PF_MEMALLOC prevents recursion deadlocks
      unsigned int pflags = current->flags;
      current->flags |= PF_MEMALLOC;
  
@@ -299,7 +298,6 @@
  
  static int demote_worker_fn(void *arg)
  {
-     // CRITICAL FIX: PF_MEMALLOC prevents recursion deadlocks
      unsigned int pflags = current->flags;
      current->flags |= PF_MEMALLOC;
  
@@ -372,7 +370,8 @@
    list_add_tail(&n->link, &promote_queue);
    atomic_inc(&promote_queue_count);
    spin_unlock_irqrestore(&promote_queue_lock, flags);
- 
+     
+     atomic64_inc(&pages_queued_promote);
    return 0;
  }
  
@@ -393,6 +392,7 @@
    atomic_inc(&demote_queue_count);
    spin_unlock_irqrestore(&demote_queue_lock, flags);
  
+     atomic64_inc(&pages_queued_demote);
    return 0;
  }
  
@@ -430,13 +430,7 @@
    return folio_has_private(folio) || (mapping && mapping_release_always(mapping));
  }
  
- static __always_inline bool is_file_folio(struct folio *folio) {
-   if (folio_test_anon(folio)) return false;
-   if (folio_test_hugetlb(folio) || folio_test_large(folio)) return false;
-   if (!folio_mapping(folio)) return false;
-   if (!folio_mapping(folio)->host) return false;
-   return true;
- }
+ // REMOVED is_file_folio to allow anonymous page migration
  
  // -----------------------------------------------------------
  // SCAN LISTS - Feeds the Queues
@@ -464,15 +458,11 @@
    __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
    spin_unlock_irq(&lruvec->lru_lock);
  
-   atomic64_add(nr_taken, &pages_scanned_promote);
+   atomic64_add(nr_taken, &pages_scanned_promote); // Reuse counter
  
    if (nr_taken > 0) {
      struct folio *folio, *next;
      list_for_each_entry_safe(folio, next, &l_hold, lru) {
-       if (!is_file_folio(folio)) {
-         list_move(&folio->lru, &l_putback);
-         continue;
-       }
        list_del_init(&folio->lru);
  
              // Add to queue
@@ -582,6 +572,7 @@
    atomic64_add(nr_taken, &pages_scanned_inactive);
  
    if (pgdat->pm_node != 0) {
+         // PMEM NODE: Check referenced to Promote
      struct folio *folio, *next;
      list_for_each_entry_safe(folio, next, &folio_list, lru) {
        if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
@@ -594,13 +585,15 @@
    }
  
    if (pgdat->pm_node == 0 && pmem_node_id != -1) {
+         // DRAM NODE: Aggressively Demote Everything
      struct folio *folio, *next;
      list_for_each_entry_safe(folio, next, &folio_list, lru) {
-       if (!is_file_folio(folio)) {
-         list_move(&folio->lru, &l_putback);
-         continue;
-       }
+             
+             // REMOVED CHECK: is_file_folio()
+             // We now migrate anonymous pages too (heap/stack) to test the mechanism.
+ 
        list_del_init(&folio->lru);
+             
              // Add to queue
        if (queue_folio_for_demote(folio) != 0) {
          list_add(&folio->lru, &l_putback);
@@ -648,25 +641,12 @@
    do {
      struct lruvec *lruvec = &memcg->nodeinfo[nid]->lruvec;
  
-         // CRITICAL FIX FOR ACTIVITY: 
-         // We commented out the "below_min" checks. 
-         // This forces the scanner to run even if memory is healthy.
-         /*
-     if (ktmm_cgroup_below_min(memcg)) continue;
-     else if (ktmm_cgroup_below_low(memcg)) {
-       if (!sc->memcg_low_reclaim) {
-         sc->memcg_low_skipped = 1;
-         continue;
-       }
-     }
-         */
- 
+         // Force scan regardless of memory pressure
      for_each_evictable_lru(lru) {
        unsigned long nr_to_scan = 1024; 
        scan_list(lru, nr_to_scan, lruvec, sc, pgdat);
      }
          
-         // Prevent soft lockups during aggressive scan
          cond_resched();
  
    } while ((memcg = ktmm_mem_cgroup_iter(NULL, memcg, NULL)));
