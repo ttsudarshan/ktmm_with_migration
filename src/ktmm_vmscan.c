@@ -2,6 +2,9 @@
  *  ktmm_vmscan.c
  *
  *  Page scanning and related functions.
+ *
+ *  FIXED: Added kprobe-based hotness tracking for proactive promotion
+ *  similar to move_one_page_numa_5_14.c to achieve ~1:1 promotion/demotion ratio.
  */
 
 //#define pr_fmt(fmt) "[ KTMM Mod ] vmscan - " fmt
@@ -68,6 +71,17 @@ wait_queue_head_t tmemd_wait[MAX_NUMNODES];
 #define NODE_DRAM 0
 #define NODE_PMEM 1
 
+/*****************************************************************************
+ * Bulk Migration & Hotness Tracking Configuration
+ * (from move_one_page_numa_5_14.c)
+ *****************************************************************************/
+#define BATCH_N 32            /* Maximum batch size for bulk migration */
+#define WORK_SLEEP_MS 10      /* Worker sleep interval when queue is empty */
+#define HIGHEST_LEVEL 7       /* Hotness threshold for promotion */
+
+/* Aging offset for slot-based hotness tracking */
+static atomic64_t aging_offset = ATOMIC64_INIT(0);
+
 /**
  * is_file_folio - check if a folio is suitable for migration
  * @folio: folio to check
@@ -83,6 +97,55 @@ static __always_inline bool is_file_folio(struct folio *folio)
 	if (!folio_mapping(folio)->host) return false;
 	return true;
 }
+
+/**
+ * is_file_page - check if a page is suitable for migration (for kprobe)
+ * @page: page to check
+ *
+ * Returns true if the page is file-backed and suitable for migration.
+ */
+static __always_inline bool is_file_page(struct page *page)
+{
+	if (PageAnon(page)) return false;
+	if (PageHuge(page) || PageTransHuge(page) || PageCompound(page)) return false;
+	if (!page_mapping(page)) return false;
+	if (!page_mapping(page)->host) return false;
+	return true;
+}
+
+
+/*****************************************************************************
+ * Bulk Migration Queue Structures (similar to move_one_page_numa_5_14.c)
+ *****************************************************************************/
+
+/**
+ * struct migrate_node - node structure for migration queues
+ * @link: list linkage
+ * @folio: pointer to the folio to migrate
+ *
+ * Used to queue folios for bulk migration by worker threads.
+ */
+struct migrate_node {
+	struct list_head link;
+	struct folio *folio;
+};
+
+/* Promotion queue: PMEM -> DRAM (hot pages detected by kprobe) */
+static LIST_HEAD(promote_queue);
+static DEFINE_SPINLOCK(promote_queue_lock);
+static atomic_t promote_queue_count = ATOMIC_INIT(0);
+
+/* Demotion queue: DRAM -> PMEM (cold pages from LRU scan) */
+static LIST_HEAD(demote_queue);
+static DEFINE_SPINLOCK(demote_queue_lock);
+static atomic_t demote_queue_count = ATOMIC_INIT(0);
+
+/* Worker threads for bulk migration */
+static struct task_struct *promote_worker_task;
+static struct task_struct *demote_worker_task;
+
+/* Kprobe for intercepting page accesses (promotion trigger) */
+static struct kprobe kp_folio_accessed;
 
 
 /*****************************************************************************
@@ -116,6 +179,15 @@ static atomic64_t pages_scanned_inactive = ATOMIC64_INIT(0);
 static atomic64_t pages_scanned_active = ATOMIC64_INIT(0);
 static atomic64_t pages_scanned_promote = ATOMIC64_INIT(0);
 
+/* Counters for bulk queue operations */
+static atomic64_t pages_queued_promote = ATOMIC64_INIT(0);       /* pages added to promote queue */
+static atomic64_t pages_queued_demote = ATOMIC64_INIT(0);        /* pages added to demote queue */
+
+/* Kprobe-specific counters */
+static atomic64_t kprobe_hits = ATOMIC64_INIT(0);                /* total kprobe triggers */
+static atomic64_t kprobe_pmem_pages = ATOMIC64_INIT(0);          /* PMEM pages seen by kprobe */
+static atomic64_t kprobe_hot_detected = ATOMIC64_INIT(0);        /* hot pages detected */
+
 /* Timer for periodic printing of counters */
 static struct timer_list page_stats_timer;
 
@@ -147,8 +219,25 @@ static void page_stats_timer_callback(struct timer_list *t)
 	u64 demote_attempted = atomic64_read(&mig_attempted_demote);
 	u64 demote_succeeded = atomic64_read(&mig_succeeded_demote);
 
-	printk(KERN_INFO "*** KTMM PAGE STATS: Total Promoted: %llu, Total Demoted: %llu ***\n",
-	       promoted, demoted);
+	/* Queue stats */
+	u64 queued_promote = atomic64_read(&pages_queued_promote);
+	u64 queued_demote = atomic64_read(&pages_queued_demote);
+	int promote_q_len = atomic_read(&promote_queue_count);
+	int demote_q_len = atomic_read(&demote_queue_count);
+
+	/* Kprobe stats */
+	u64 kp_hits = atomic64_read(&kprobe_hits);
+	u64 kp_pmem = atomic64_read(&kprobe_pmem_pages);
+	u64 kp_hot = atomic64_read(&kprobe_hot_detected);
+
+	/* Calculate ratio */
+	u64 ratio_pct = 0;
+	if (demoted > 0) {
+		ratio_pct = (promoted * 100) / demoted;
+	}
+
+	printk(KERN_INFO "*** KTMM PAGE STATS: Promoted=%llu, Demoted=%llu (Ratio: %llu.%02llu:1) ***\n",
+	       promoted, demoted, ratio_pct / 100, ratio_pct % 100);
 
 	/* Print page flow debug info */
 	printk(KERN_INFO "*** KTMM PAGE FLOW DEBUG ***\n");
@@ -158,14 +247,165 @@ static void page_stats_timer_callback(struct timer_list *t)
 	       inactive_to_active, active_to_inactive);
 	printk(KERN_INFO "  Flow: active->promote=%llu, promote->DRAM=%llu (failed=%llu)\n",
 	       active_to_promote, promote_to_dram, promote_failed);
-	printk(KERN_INFO "  Bulk Promote: attempted=%llu, succeeded=%llu\n",
-	       promote_attempted, promote_succeeded);
-	printk(KERN_INFO "  Bulk Demote: attempted=%llu, succeeded=%llu\n",
-	       demote_attempted, demote_succeeded);
+	printk(KERN_INFO "  Bulk Promote: attempted=%llu, succeeded=%llu (queued=%llu, pending=%d)\n",
+	       promote_attempted, promote_succeeded, queued_promote, promote_q_len);
+	printk(KERN_INFO "  Bulk Demote: attempted=%llu, succeeded=%llu (queued=%llu, pending=%d)\n",
+	       demote_attempted, demote_succeeded, queued_demote, demote_q_len);
+	printk(KERN_INFO "  Kprobe: hits=%llu, pmem_pages=%llu, hot_detected=%llu\n",
+	       kp_hits, kp_pmem, kp_hot);
 	printk(KERN_INFO "*** END PAGE FLOW DEBUG ***\n");
 
 	/* Re-arm the timer for another 5 seconds */
 	mod_timer(&page_stats_timer, jiffies + 5 * HZ);
+}
+
+
+/*****************************************************************************
+ * Kprobe-based Hotness Tracking (from move_one_page_numa_5_14.c)
+ *
+ * This is the KEY to achieving 1:1 ratio - we intercept EVERY page access
+ * and proactively queue hot pages for promotion, rather than waiting for
+ * slow LRU list scanning.
+ *****************************************************************************/
+
+static __always_inline u64 now_off(void)
+{
+	return (u64)atomic64_read(&aging_offset);
+}
+
+static __always_inline u64 clamp_u64(u64 v, u64 lo, u64 hi)
+{
+	if (v < lo) return lo;
+	if (v > hi) return hi;
+	return v;
+}
+
+/**
+ * queue_page_for_promote_kprobe - add a page to the promotion queue (from kprobe)
+ * @page: page to queue for promotion (PMEM -> DRAM)
+ *
+ * Takes a reference on the page and queues it for bulk migration.
+ * This is called from kprobe context so uses GFP_ATOMIC.
+ *
+ * Returns: 0 on success, -ENOMEM on allocation failure
+ */
+static int queue_page_for_promote_kprobe(struct page *page)
+{
+	struct migrate_node *n;
+	unsigned long flags;
+	struct folio *folio = page_folio(page);
+
+	n = kmalloc(sizeof(*n), GFP_ATOMIC);
+	if (!n)
+		return -ENOMEM;
+
+	INIT_LIST_HEAD(&n->link);
+	folio_get(folio);  /* Take reference for queue */
+	n->folio = folio;
+
+	spin_lock_irqsave(&promote_queue_lock, flags);
+	list_add_tail(&n->link, &promote_queue);
+	atomic_inc(&promote_queue_count);
+	spin_unlock_irqrestore(&promote_queue_lock, flags);
+
+	atomic64_inc(&pages_queued_promote);
+	return 0;
+}
+
+/**
+ * kp_folio_accessed_pre - kprobe pre-handler for folio_mark_accessed
+ * @p: kprobe structure
+ * @regs: CPU registers at probe point
+ *
+ * This function intercepts every call to folio_mark_accessed (or mark_page_accessed)
+ * and implements slot-based hotness tracking. When a page on PMEM reaches
+ * HIGHEST_LEVEL hotness, it is queued for promotion to DRAM.
+ *
+ * This is the KEY mechanism from move_one_page_numa_5_14.c that enables
+ * proactive promotion to achieve ~1:1 ratio with demotion.
+ */
+static int kp_folio_accessed_pre(struct kprobe *p, struct pt_regs *regs)
+{
+	struct folio *folio;
+	struct page *page;
+	struct page_ext *pe;
+	u64 off, slot, new_slot, eff;
+	int nid;
+
+	atomic64_inc(&kprobe_hits);
+
+	/*
+	 * First argument to folio_mark_accessed/mark_page_accessed is in rdi (x86_64)
+	 * It could be either a folio* or page* depending on kernel version.
+	 * In kernel 6.1+, folio_mark_accessed takes a folio*.
+	 */
+	folio = (struct folio *)regs->di;
+	if (!folio)
+		return 0;
+
+	/* Get the head page */
+	page = &folio->page;
+	if (!page)
+		return 0;
+
+	/* Only process file-backed pages */
+	if (!is_file_page(page))
+		return 0;
+
+	/* Check which node this page is on */
+	nid = page_to_nid(page);
+	
+	/* Only promote pages that are on PMEM (node 1) */
+	if (nid != NODE_PMEM)
+		return 0;
+
+	atomic64_inc(&kprobe_pmem_pages);
+
+	/*
+	 * Get page_ext for hotness tracking
+	 * page_ext stores our uts_slot_id for tracking access frequency
+	 */
+	pe = lookup_page_ext(page);
+	if (!pe)
+		return 0;
+
+	/*
+	 * Slot-based aging algorithm (from move_one_page_numa_5_14.c):
+	 * - Each access increments the slot value
+	 * - Slot is clamped to [aging_offset+1, aging_offset+HIGHEST_LEVEL]
+	 * - When effective level (slot - offset) reaches HIGHEST_LEVEL, page is hot
+	 */
+	off = now_off();
+	slot = READ_ONCE(pe->uts_slot_id);
+	new_slot = clamp_u64(slot + 1, off + 1, off + HIGHEST_LEVEL);
+	WRITE_ONCE(pe->uts_slot_id, new_slot);
+
+	/* Calculate effective hotness level */
+	eff = (new_slot > off) ? (new_slot - off) : 0;
+
+	/* Not hot enough yet */
+	if (eff < HIGHEST_LEVEL)
+		return 0;
+
+	atomic64_inc(&kprobe_hot_detected);
+
+	/*
+	 * Check if page is already in promote queue using the promote flag
+	 * This prevents duplicate entries
+	 */
+	if (uts_page_in_promote(page))
+		return 0;
+
+	/* Mark page as being in promote queue */
+	uts_page_set_in_promote(page, true);
+
+	/* Queue the page for bulk promotion */
+	if (queue_page_for_promote_kprobe(page) != 0) {
+		/* Failed to queue, clear the flag */
+		uts_page_set_in_promote(page, false);
+	}
+
+	return 0;
 }
 
 
@@ -439,6 +679,216 @@ static struct page *ktmm_alloc_pages(gfp_t gfp_mask, unsigned int order, int pre
 
 
 /*****************************************************************************
+ * Bulk Migration Worker Threads (similar to move_one_page_numa_5_14.c)
+ *****************************************************************************/
+
+/**
+ * promote_worker_fn - worker thread for bulk promotion (PMEM -> DRAM)
+ * @arg: unused
+ *
+ * This worker thread runs continuously and:
+ * 1. Pops batches of up to BATCH_N folios from promote_queue
+ * 2. Migrates them in bulk to DRAM using migrate_pages()
+ * 3. Handles failures by putting pages back to LRU
+ *
+ * Based on worker_fn from move_one_page_numa_5_14.c
+ */
+static int promote_worker_fn(void *arg)
+{
+	while (!kthread_should_stop()) {
+		struct migrate_node *batch[BATCH_N];
+		int n = 0, i;
+		unsigned long flags;
+		LIST_HEAD(migrate_list);
+		unsigned int nr_succeeded = 0;
+		int ret;
+
+		/* Bulk-pop migrate_nodes from promote queue */
+		spin_lock_irqsave(&promote_queue_lock, flags);
+		while (n < BATCH_N && !list_empty(&promote_queue)) {
+			struct migrate_node *x =
+				list_first_entry(&promote_queue, struct migrate_node, link);
+			list_del_init(&x->link);
+			atomic_dec(&promote_queue_count);
+			batch[n++] = x;
+		}
+		spin_unlock_irqrestore(&promote_queue_lock, flags);
+
+		if (n == 0) {
+			msleep(WORK_SLEEP_MS);
+			continue;
+		}
+
+		/* Build migration list from batch */
+		for (i = 0; i < n; i++) {
+			struct migrate_node *x = batch[i];
+			struct folio *folio = x->folio;
+			struct page *page = &folio->page;
+
+			/* Clear the in-promote flag now that we're processing */
+			uts_page_set_in_promote(page, false);
+
+			/* Add folio to migration list */
+			list_add_tail(&folio->lru, &migrate_list);
+			kfree(x);
+		}
+
+		/* Bulk migration attempt */
+		atomic64_add(n, &mig_attempted_promote);
+
+		/*
+		 * Use migrate_pages() to migrate all folios to DRAM
+		 * alloc_normal_page allocates on DRAM (node without __GFP_PMEM)
+		 */
+		ret = migrate_pages(&migrate_list, alloc_normal_page, NULL,
+				    0, MIGRATE_SYNC, MR_NUMA_MISPLACED,
+				    &nr_succeeded);
+
+		if (nr_succeeded > 0) {
+			atomic64_add(nr_succeeded, &mig_succeeded_promote);
+			atomic64_add(nr_succeeded, &total_pages_promoted);
+			atomic64_add(nr_succeeded, &pages_promote_to_dram);
+		}
+
+		/* Any folios still in migrate_list failed - put them back to LRU */
+		if (!list_empty(&migrate_list)) {
+			struct folio *folio, *next;
+			int failed = 0;
+
+			list_for_each_entry_safe(folio, next, &migrate_list, lru) {
+				list_del_init(&folio->lru);
+				folio_put(folio);  /* Drop our reference */
+				failed++;
+			}
+			atomic64_add(failed, &pages_promote_failed);
+		}
+
+		pr_info("ktmm: promote_worker batch=%d succeeded=%u total_attempted=%llu total_succeeded=%llu\n",
+			n, nr_succeeded,
+			(unsigned long long)atomic64_read(&mig_attempted_promote),
+			(unsigned long long)atomic64_read(&mig_succeeded_promote));
+
+		cond_resched();
+	}
+	return 0;
+}
+
+/**
+ * demote_worker_fn - worker thread for bulk demotion (DRAM -> PMEM)
+ * @arg: unused
+ *
+ * This worker thread runs continuously and:
+ * 1. Pops batches of up to BATCH_N folios from demote_queue
+ * 2. Migrates them in bulk to PMEM using migrate_pages()
+ * 3. Handles failures by putting pages back to LRU
+ *
+ * Based on worker_fn from move_one_page_numa_5_14.c
+ */
+static int demote_worker_fn(void *arg)
+{
+	while (!kthread_should_stop()) {
+		struct migrate_node *batch[BATCH_N];
+		int n = 0, i;
+		unsigned long flags;
+		LIST_HEAD(migrate_list);
+		unsigned int nr_succeeded = 0;
+		int ret;
+
+		/* Bulk-pop migrate_nodes from demote queue */
+		spin_lock_irqsave(&demote_queue_lock, flags);
+		while (n < BATCH_N && !list_empty(&demote_queue)) {
+			struct migrate_node *x =
+				list_first_entry(&demote_queue, struct migrate_node, link);
+			list_del_init(&x->link);
+			atomic_dec(&demote_queue_count);
+			batch[n++] = x;
+		}
+		spin_unlock_irqrestore(&demote_queue_lock, flags);
+
+		if (n == 0) {
+			msleep(WORK_SLEEP_MS);
+			continue;
+		}
+
+		/* Build migration list from batch */
+		for (i = 0; i < n; i++) {
+			struct migrate_node *x = batch[i];
+			struct folio *folio = x->folio;
+
+			/* Add folio to migration list */
+			list_add_tail(&folio->lru, &migrate_list);
+			kfree(x);
+		}
+
+		/* Bulk migration attempt */
+		atomic64_add(n, &mig_attempted_demote);
+
+		/*
+		 * Use migrate_pages() to migrate all folios to PMEM
+		 * alloc_pmem_page allocates on PMEM (node with __GFP_PMEM)
+		 */
+		ret = migrate_pages(&migrate_list, alloc_pmem_page, NULL,
+				    0, MIGRATE_SYNC, MR_NUMA_MISPLACED,
+				    &nr_succeeded);
+
+		if (nr_succeeded > 0) {
+			atomic64_add(nr_succeeded, &mig_succeeded_demote);
+			atomic64_add(nr_succeeded, &total_pages_demoted);
+		}
+
+		/* Any folios still in migrate_list failed - put them back to LRU */
+		if (!list_empty(&migrate_list)) {
+			struct folio *folio, *next;
+
+			list_for_each_entry_safe(folio, next, &migrate_list, lru) {
+				list_del_init(&folio->lru);
+				folio_put(folio);  /* Drop our reference */
+			}
+		}
+
+		pr_info("ktmm: demote_worker batch=%d succeeded=%u total_attempted=%llu total_succeeded=%llu\n",
+			n, nr_succeeded,
+			(unsigned long long)atomic64_read(&mig_attempted_demote),
+			(unsigned long long)atomic64_read(&mig_succeeded_demote));
+
+		cond_resched();
+	}
+	return 0;
+}
+
+/**
+ * queue_folio_for_demote - add a folio to the demotion queue
+ * @folio: folio to queue for demotion (DRAM -> PMEM)
+ *
+ * Takes a reference on the folio and queues it for bulk migration
+ * by the demote_worker thread.
+ *
+ * Returns: 0 on success, -ENOMEM on allocation failure
+ */
+static int queue_folio_for_demote(struct folio *folio)
+{
+	struct migrate_node *n;
+	unsigned long flags;
+
+	n = kmalloc(sizeof(*n), GFP_ATOMIC);
+	if (!n)
+		return -ENOMEM;
+
+	INIT_LIST_HEAD(&n->link);
+	folio_get(folio);  /* Take reference for queue */
+	n->folio = folio;
+
+	spin_lock_irqsave(&demote_queue_lock, flags);
+	list_add_tail(&n->link, &demote_queue);
+	atomic_inc(&demote_queue_count);
+	spin_unlock_irqrestore(&demote_queue_lock, flags);
+
+	atomic64_inc(&pages_queued_demote);
+	return 0;
+}
+
+
+/*****************************************************************************
  * Node Scanning, Shrinking, and Promotion
  *****************************************************************************/
 
@@ -549,7 +999,9 @@ static inline bool ktmm_folio_needs_release(struct folio *folio)
  * to the active lru list. This function should only really be utilized by the
  * pmem node.
  *
- * Uses migrate_pages() kernel API to migrate pages from PMEM to DRAM one by one.
+ * NOTE: With kprobe-based promotion, this function is less critical.
+ * The kprobe handles most promotion. This is kept for any pages that
+ * reach the promote list through the LRU path.
  */
 static void scan_promote_list(unsigned long nr_to_scan,
 				struct lruvec *lruvec,
@@ -561,7 +1013,6 @@ static void scan_promote_list(unsigned long nr_to_scan,
 
 	unsigned long nr_taken;
 	unsigned long nr_scanned;
-	unsigned long nr_migrated = 0;
 	isolate_mode_t isolate_mode = 0;
 	LIST_HEAD(l_hold);
 	int file = is_file_lru(lru);
@@ -594,62 +1045,9 @@ static void scan_promote_list(unsigned long nr_to_scan,
 	// pr_debug("pgdat %d taken %lu on promote list", nid, nr_taken);
 
 	/*
-	 * MIGRATION: Promote pages from PMEM to DRAM one by one
-	 * Using migrate_pages() with alloc_normal_page (allocates on DRAM)
+	 * With kprobe-based promotion, pages in the promote list are
+	 * already being handled by the kprobe path. Just put them back.
 	 */
-	if (nr_taken > 0) {
-		struct folio *folio, *next;
-		int attempted = 0;
-
-		list_for_each_entry_safe(folio, next, &l_hold, lru) {
-			LIST_HEAD(single_folio_list);
-			unsigned int nr_succeeded = 0;
-			int ret;
-
-			/* Only migrate file-backed pages */
-			if (!is_file_folio(folio)) {
-				atomic64_inc(&pages_promote_failed);
-				continue;
-			}
-
-			attempted++;
-			atomic64_inc(&mig_attempted_promote);
-
-			/* Move folio to temporary single-item list for migration */
-			list_del_init(&folio->lru);
-			list_add(&folio->lru, &single_folio_list);
-
-			/* Migrate this single folio using kernel's migrate_pages() */
-			ret = migrate_pages(&single_folio_list, alloc_normal_page, NULL,
-					    0, MIGRATE_SYNC, MR_NUMA_MISPLACED,
-					    &nr_succeeded);
-
-			if (nr_succeeded > 0) {
-				/* Success! Page was migrated to DRAM */
-				nr_migrated++;
-				atomic64_inc(&mig_succeeded_promote);
-				atomic64_inc(&pages_promote_to_dram);
-			} else {
-				/* Failed - put folio back to l_hold for LRU putback */
-				if (!list_empty(&single_folio_list)) {
-					list_splice_init(&single_folio_list, &l_hold);
-				}
-				atomic64_inc(&pages_promote_failed);
-			}
-		}
-
-		if (nr_migrated > 0) {
-			__mod_node_page_state(pgdat, NR_PROMOTED, nr_migrated);
-			/* Update the total promoted counter */
-			atomic64_add(nr_migrated, &total_pages_promoted);
-			printk(KERN_INFO "ktmm: pgdat %d PROMOTED %lu folios from PMEM to DRAM\n", nid, nr_migrated);
-		}
-
-		pr_info("ktmm: promote attempted=%d succeeded=%lu total_attempted=%llu total_succeeded=%llu\n",
-			attempted, nr_migrated,
-			(unsigned long long)atomic64_read(&mig_attempted_promote),
-			(unsigned long long)atomic64_read(&mig_succeeded_promote));
-	}
 
 	spin_lock_irq(&lruvec->lru_lock);
 
@@ -825,7 +1223,8 @@ static void scan_active_list(unsigned long nr_to_scan,
  * reclaiming here, and let direct reclaim or kswapd take care of reclaiming
  * folios when neccessary.
  *
- * Uses migrate_pages() kernel API to migrate pages from DRAM to PMEM one by one.
+ * MODIFIED: Now queues folios for bulk demotion instead of one-by-one migration.
+ * Uses demote_queue and demote_worker thread for efficient batched migration.
  */
 static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 					struct lruvec *lruvec,
@@ -837,9 +1236,10 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 
 	LIST_HEAD(folio_list);
 	LIST_HEAD(l_active);	/* folios to activate (for PMEM node) */
+	LIST_HEAD(l_putback);	/* folios to put back to LRU */
 	unsigned long nr_scanned;
 	unsigned long nr_taken = 0;
-	unsigned long nr_migrated = 0;
+	unsigned long nr_queued = 0;
 	unsigned long nr_activate = 0;
 	unsigned long vm_flags;
 	bool file = is_file_lru(lru);
@@ -890,58 +1290,36 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	}
 
 	/*
-	 * MIGRATION: Demote pages from DRAM to PMEM one by one
-	 * Using migrate_pages() with alloc_pmem_page (allocates on PMEM)
+	 * MIGRATION: Queue pages for bulk demotion (DRAM -> PMEM)
+	 * Instead of migrating one-by-one, we queue folios for the
+	 * demote_worker thread to handle in batches.
 	 */
 	if (pgdat->pm_node == 0 && pmem_node_id != -1) {
 		struct folio *folio, *next;
-		int attempted = 0;
 
 		list_for_each_entry_safe(folio, next, &folio_list, lru) {
-			LIST_HEAD(single_folio_list);
-			unsigned int nr_succeeded = 0;
-			int ret;
-
 			/* Only migrate file-backed pages */
 			if (!is_file_folio(folio)) {
+				/* Move to putback list */
+				list_move(&folio->lru, &l_putback);
 				continue;
 			}
 
-			attempted++;
-			atomic64_inc(&mig_attempted_demote);
-
-			/* Move folio to temporary single-item list for migration */
+			/* Remove from folio_list and queue for bulk migration */
 			list_del_init(&folio->lru);
-			list_add(&folio->lru, &single_folio_list);
 
-			/* Migrate this single folio using kernel's migrate_pages() */
-			ret = migrate_pages(&single_folio_list, alloc_pmem_page, NULL,
-					    0, MIGRATE_SYNC, MR_NUMA_MISPLACED,
-					    &nr_succeeded);
-
-			if (nr_succeeded > 0) {
-				/* Success! Page was migrated to PMEM */
-				nr_migrated++;
-				atomic64_inc(&mig_succeeded_demote);
+			if (queue_folio_for_demote(folio) == 0) {
+				nr_queued++;
 			} else {
-				/* Failed - put folio back to folio_list for LRU putback */
-				if (!list_empty(&single_folio_list)) {
-					list_splice_init(&single_folio_list, &folio_list);
-				}
+				/* Failed to queue - put back to LRU */
+				list_add(&folio->lru, &l_putback);
 			}
 		}
 
-		if (nr_migrated > 0) {
-			__mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
-			/* Update the total demoted counter */
-			atomic64_add(nr_migrated, &total_pages_demoted);
-			printk(KERN_INFO "ktmm: pgdat %d DEMOTED %lu folios from DRAM to PMEM\n", nid, nr_migrated);
+		if (nr_queued > 0) {
+			printk(KERN_INFO "ktmm: pgdat %d QUEUED %lu folios for demotion (DRAM->PMEM)\n",
+			       nid, nr_queued);
 		}
-
-		pr_info("ktmm: demote attempted=%d succeeded=%lu total_attempted=%llu total_succeeded=%llu\n",
-			attempted, nr_migrated,
-			(unsigned long long)atomic64_read(&mig_attempted_demote),
-			(unsigned long long)atomic64_read(&mig_succeeded_demote));
 	}
 
 	spin_lock_irq(&lruvec->lru_lock);
@@ -952,6 +1330,7 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	}
 
 	ktmm_move_folios_to_lru(lruvec, &folio_list);
+	ktmm_move_folios_to_lru(lruvec, &l_putback);
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
 
 	spin_unlock_irq(&lruvec->lru_lock);
@@ -960,8 +1339,10 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	ktmm_free_unref_page_list(&l_active);
 	ktmm_cgroup_uncharge_list(&folio_list);
 	ktmm_free_unref_page_list(&folio_list);
+	ktmm_cgroup_uncharge_list(&l_putback);
+	ktmm_free_unref_page_list(&l_putback);
 
-	return nr_migrated;
+	return nr_queued;
 }
 
 
@@ -1202,6 +1583,59 @@ static struct ktmm_hook vmscan_hooks[] = {
 
 
 /**
+ * drain_migration_queues - drain all pending migrations before exit
+ *
+ * Cleans up any folios remaining in the promote and demote queues
+ * by dropping their references and freeing the queue nodes.
+ */
+static void drain_migration_queues(void)
+{
+	struct migrate_node *n;
+	unsigned long flags;
+
+	/* Drain promote queue */
+	while (1) {
+		spin_lock_irqsave(&promote_queue_lock, flags);
+
+		if (list_empty(&promote_queue)) {
+			spin_unlock_irqrestore(&promote_queue_lock, flags);
+			break;
+		}
+
+		n = list_first_entry(&promote_queue, struct migrate_node, link);
+		list_del_init(&n->link);
+		atomic_dec(&promote_queue_count);
+
+		spin_unlock_irqrestore(&promote_queue_lock, flags);
+
+		/* Clear in-promote flag */
+		uts_page_set_in_promote(&n->folio->page, false);
+		folio_put(n->folio);
+		kfree(n);
+	}
+
+	/* Drain demote queue */
+	while (1) {
+		spin_lock_irqsave(&demote_queue_lock, flags);
+
+		if (list_empty(&demote_queue)) {
+			spin_unlock_irqrestore(&demote_queue_lock, flags);
+			break;
+		}
+
+		n = list_first_entry(&demote_queue, struct migrate_node, link);
+		list_del_init(&n->link);
+		atomic_dec(&demote_queue_count);
+
+		spin_unlock_irqrestore(&demote_queue_lock, flags);
+
+		folio_put(n->folio);
+		kfree(n);
+	}
+}
+
+
+/**
  * Daemons are only started on online/active nodes. They are
  * currently stored in a local array.
  *
@@ -1228,6 +1662,45 @@ int tmemd_start_available(void)
 	/* Initialize and start the page stats timer */
 	timer_setup(&page_stats_timer, page_stats_timer_callback, 0);
 	mod_timer(&page_stats_timer, jiffies + 5 * HZ);
+
+	/*
+	 * Register kprobe on folio_mark_accessed (or mark_page_accessed)
+	 * This is the KEY mechanism for proactive promotion - intercepts
+	 * every page access and queues hot PMEM pages for promotion.
+	 *
+	 * Try folio_mark_accessed first (kernel 6.1+), fall back to mark_page_accessed
+	 */
+	kp_folio_accessed.symbol_name = "folio_mark_accessed";
+	kp_folio_accessed.pre_handler = kp_folio_accessed_pre;
+	
+	if (register_kprobe(&kp_folio_accessed)) {
+		/* Try fallback to mark_page_accessed */
+		kp_folio_accessed.symbol_name = "mark_page_accessed";
+		if (register_kprobe(&kp_folio_accessed)) {
+			pr_err("ktmm: failed to register kprobe for page access tracking\n");
+		} else {
+			pr_info("ktmm: kprobe registered on mark_page_accessed\n");
+		}
+	} else {
+		pr_info("ktmm: kprobe registered on folio_mark_accessed\n");
+	}
+
+	/* Start the bulk migration worker threads */
+	promote_worker_task = kthread_run(promote_worker_fn, NULL, "ktmm_promote_worker");
+	if (IS_ERR(promote_worker_task)) {
+		promote_worker_task = NULL;
+		pr_err("ktmm: failed to start promote_worker thread\n");
+	} else {
+		pr_info("ktmm: promote_worker thread started\n");
+	}
+
+	demote_worker_task = kthread_run(demote_worker_fn, NULL, "ktmm_demote_worker");
+	if (IS_ERR(demote_worker_task)) {
+		demote_worker_task = NULL;
+		pr_err("ktmm: failed to start demote_worker thread\n");
+	} else {
+		pr_info("ktmm: demote_worker thread started\n");
+	}
 	
 	for_each_online_node(nid)
 	{
@@ -1255,8 +1728,28 @@ void tmemd_stop_all(void)
 {
 	int nid;
 
+	/* Unregister the kprobe first to stop new promotions */
+	unregister_kprobe(&kp_folio_accessed);
+	pr_info("ktmm: kprobe unregistered\n");
+
 	/* Stop and delete the page stats timer */
 	del_timer_sync(&page_stats_timer);
+
+	/* Stop the bulk migration worker threads */
+	if (promote_worker_task) {
+		kthread_stop(promote_worker_task);
+		promote_worker_task = NULL;
+		pr_info("ktmm: promote_worker thread stopped\n");
+	}
+
+	if (demote_worker_task) {
+		kthread_stop(demote_worker_task);
+		demote_worker_task = NULL;
+		pr_info("ktmm: demote_worker thread stopped\n");
+	}
+
+	/* Drain any remaining items in migration queues */
+	drain_migration_queues();
 
 	/* Print final stats before stopping */
 	printk(KERN_INFO "*** KTMM FINAL STATS: Total Promoted: %llu, Total Demoted: %llu ***\n",
@@ -1276,12 +1769,18 @@ void tmemd_stop_all(void)
 	       (u64)atomic64_read(&pages_active_to_promote),
 	       (u64)atomic64_read(&pages_promote_to_dram),
 	       (u64)atomic64_read(&pages_promote_failed));
-	printk(KERN_INFO "  Bulk Promote: attempted=%llu, succeeded=%llu\n",
+	printk(KERN_INFO "  Bulk Promote: attempted=%llu, succeeded=%llu (queued=%llu)\n",
 	       (u64)atomic64_read(&mig_attempted_promote),
-	       (u64)atomic64_read(&mig_succeeded_promote));
-	printk(KERN_INFO "  Bulk Demote: attempted=%llu, succeeded=%llu\n",
+	       (u64)atomic64_read(&mig_succeeded_promote),
+	       (u64)atomic64_read(&pages_queued_promote));
+	printk(KERN_INFO "  Bulk Demote: attempted=%llu, succeeded=%llu (queued=%llu)\n",
 	       (u64)atomic64_read(&mig_attempted_demote),
-	       (u64)atomic64_read(&mig_succeeded_demote));
+	       (u64)atomic64_read(&mig_succeeded_demote),
+	       (u64)atomic64_read(&pages_queued_demote));
+	printk(KERN_INFO "  Kprobe: hits=%llu, pmem_pages=%llu, hot_detected=%llu\n",
+	       (u64)atomic64_read(&kprobe_hits),
+	       (u64)atomic64_read(&kprobe_pmem_pages),
+	       (u64)atomic64_read(&kprobe_hot_detected));
 	printk(KERN_INFO "*** END FINAL PAGE FLOW STATS ***\n");
 
 	for_each_online_node(nid)
