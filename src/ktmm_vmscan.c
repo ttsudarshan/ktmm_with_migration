@@ -2,9 +2,9 @@
  * ktmm_vmscan.c
  *
  * HYBRID IMPLEMENTATION:
- * 1. Promotion: Uses Kprobes + Access Counting (Exact "Working" Approach)
- * 2. Demotion: Uses LRU Scanning (Your Original Logic)
- * * Adapted for Kernel 6.1
+ * 1. Promotion: Uses Kprobes + Internal Hash Table (Simulates "Working" Code Logic)
+ * 2. Demotion: Uses LRU Scanning
+ * * Fixed for Kernel 6.1 Compilation
  */
 
  #include <linux/module.h>
@@ -25,16 +25,16 @@
  #include <linux/migrate_mode.h>
  #include <linux/node.h>
  #include <linux/psi.h>
+ #include <linux/hashtable.h> /* Added for access tracking */
  #include "ktmm_hook.h"
  #include "ktmm_vmscan.h"
  
  /*****************************************************************************
   * CONFIGURATION
   *****************************************************************************/
- #define HIGHEST_LEVEL 7        /* Promotion Threshold (from working code) */
+ #define HIGHEST_LEVEL 7        /* Promotion Threshold */
  #define BATCH_N 32             /* Batch size for promotion */
  #define WORK_SLEEP_MS 10       /* Worker sleep time */
- #define TMEMD_GFP_FLAGS GFP_NOIO
  
  int pmem_node = -1;
  
@@ -47,6 +47,19 @@
  /* Demotion Scanner Threads */
  static struct task_struct *tmemd_list[MAX_NUMNODES];
  wait_queue_head_t tmemd_wait[MAX_NUMNODES];
+ 
+ /*****************************************************************************
+  * ACCESS TRACKING (Hash Table Replacement for page_ext)
+  *****************************************************************************/
+ struct access_record {
+   struct hlist_node node;
+   struct page *page;
+   int count;
+ };
+ 
+ /* 10 bits = 1024 buckets */
+ static DEFINE_HASHTABLE(access_map, 10);
+ static DEFINE_SPINLOCK(access_lock);
  
  /*****************************************************************************
   * PROMOTION LOGIC (The "Working" Kprobe Approach)
@@ -63,21 +76,6 @@
  static struct task_struct *promote_worker_task;
  static struct kprobe kp;
  
- /* Fake struct for compilation if uts_slot_id is missing in standard kernels.
-  * If your kernel has the patch, delete this struct definition. */
- struct ktmm_page_ext_stub {
-     unsigned long uts_slot_id;
- };
- 
- /* Helper to get page extension. Safely falls back if strict type isn't found */
- static inline unsigned long *get_uts_slot(struct page *page) {
-     struct page_ext *pe = lookup_page_ext(page);
-     if (!pe) return NULL;
-     /* We assume the custom field is at the start or cast it. 
-        Adjust this if you have the real struct definition! */
-     return (unsigned long *)pe; 
- }
- 
  static struct page *ktmm_new_page_node(struct page *src, unsigned long private)
  {
    int nid = (int)private;
@@ -86,16 +84,16 @@
  }
  
  /* * KPROBE HANDLER 
-  * Intercepts folio_mark_accessed to count accesses.
+  * Intercepts folio_mark_accessed to count accesses using Hash Table.
   */
  static int kp_pre(struct kprobe *p, struct pt_regs *regs)
  {
    struct folio *folio;
    struct page *page;
-   unsigned long *slot_ptr;
-   unsigned long slot;
+   struct access_record *rec;
    struct promote_node *n;
    unsigned long flags;
+   bool found = false;
  
    /* Kernel 6.1: Argument 1 is struct folio* */
    folio = (struct folio *)regs->di;
@@ -108,42 +106,60 @@
  
    page = &folio->page;
  
-   /* * ACCESS COUNTING (The "Secret Sauce") * */
-   slot_ptr = get_uts_slot(page);
-   if (!slot_ptr) return 0;
+   /* Only track pages currently on PMEM (we only promote FROM pmem) */
+   if (page_to_nid(page) == 0) return 0; /* Already on DRAM */
  
-   slot = READ_ONCE(*slot_ptr);
+   /* * ACCESS COUNTING LOGIC * */
+   spin_lock_irqsave(&access_lock, flags);
    
-   /* Increment Counter */
-   if (slot < HIGHEST_LEVEL) {
-     WRITE_ONCE(*slot_ptr, slot + 1);
-     return 0; /* Not hot enough yet */
+   hash_for_each_possible(access_map, rec, node, (unsigned long)page) {
+     if (rec->page == page) {
+       rec->count++;
+       found = true;
+       break;
+     }
    }
  
-   /* Reset counter to avoid immediate re-queueing */
-   WRITE_ONCE(*slot_ptr, 0);
- 
-   /* * QUEUE FOR PROMOTION * */
-   n = kmalloc(sizeof(*n), GFP_ATOMIC);
-   if (!n) return 0;
+   if (!found) {
+     /* New entry */
+     rec = kmalloc(sizeof(*rec), GFP_ATOMIC);
+     if (rec) {
+       rec->page = page;
+       rec->count = 1;
+       hash_add(access_map, &rec->node, (unsigned long)page);
+     }
+   }
    
-   INIT_LIST_HEAD(&n->link);
-   get_page(page); /* Pin the page */
-   n->page = page;
+   /* Check Threshold */
+   if (rec && rec->count >= HIGHEST_LEVEL) {
+     /* Threshold met! Remove from tracker and queue for promotion */
+     hash_del(&rec->node);
+     kfree(rec);
+     spin_unlock_irqrestore(&access_lock, flags);
+     
+     /* Queue for promotion */
+     n = kmalloc(sizeof(*n), GFP_ATOMIC);
+     if (!n) return 0;
+     
+     INIT_LIST_HEAD(&n->link);
+     get_page(page); /* Pin the page */
+     n->page = page;
  
-   spin_lock_irqsave(&promote_lock, flags);
-   list_add_tail(&n->link, &promote_list);
-   atomic_inc(&promote_count);
-   spin_unlock_irqrestore(&promote_lock, flags);
-   
-   atomic64_inc(&promote_queued);
+     spin_lock_irqsave(&promote_lock, flags);
+     list_add_tail(&n->link, &promote_list);
+     atomic_inc(&promote_count);
+     spin_unlock_irqrestore(&promote_lock, flags);
+     
+     atomic64_inc(&promote_queued);
+     return 0;
+   }
  
+   spin_unlock_irqrestore(&access_lock, flags);
    return 0;
  }
  
  /*
   * PROMOTION WORKER THREAD
-  * Wakes up, batches pages, and moves them to DRAM.
   */
  static int promote_worker_fn(void *arg)
  {
@@ -183,7 +199,8 @@
  
      /* 3. Execute Batch Migration */
      if (!list_empty(&migrate_list)) {
-       int nr_succeeded = 0;
+       unsigned int nr_succeeded = 0; /* FIXED: changed from unsigned long to unsigned int */
+       
        /* Target Node 0 (DRAM) */
        migrate_pages(&migrate_list, ktmm_new_page_node, NULL, 
                0, MIGRATE_SYNC, MR_NUMA_MISPLACED, &nr_succeeded);
@@ -207,7 +224,7 @@
  }
  
  /*****************************************************************************
-  * DEMOTION LOGIC (Your Original Scanner - Scaled Down)
+  * DEMOTION LOGIC (Scanning)
   *****************************************************************************/
  
  /* Hooks wrappers needed for scanner */
@@ -234,13 +251,13 @@
  
  /*
   * Scan Inactive List - ONLY Handles Demotion (DRAM -> PMEM)
-  * We removed the promotion logic from here because the Kprobe handles it now.
   */
  static unsigned long scan_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec, struct scan_control *sc, enum lru_list lru, struct pglist_data *pgdat)
  {
    LIST_HEAD(folio_list);
    LIST_HEAD(l_migrate);
-   unsigned long nr_scanned, nr_taken, nr_succeeded = 0;
+   unsigned long nr_scanned, nr_taken;
+   unsigned int nr_succeeded = 0; /* FIXED: unsigned int */
    unsigned long vm_flags;
    int file = is_file_lru(lru);
  
@@ -295,7 +312,6 @@
  
  static void scan_node(pg_data_t *pgdat, struct scan_control *sc, struct mem_cgroup_reclaim_cookie *reclaim)
  {
-   enum lru_list lru;
    struct mem_cgroup *memcg = ktmm_mem_cgroup_iter(NULL, NULL, reclaim);
    sc->target_mem_cgroup = memcg;
    int nid = pgdat->node_id;
@@ -355,6 +371,7 @@
           (u64)atomic64_read(&total_pages_promoted), 
           (u64)atomic64_read(&total_pages_demoted),
           (u64)atomic64_read(&promote_queued));
+   mod_timer(t, jiffies + 5 * HZ);
  }
  static DEFINE_TIMER(stats_timer, print_stats);
  
@@ -393,6 +410,10 @@
  void tmemd_stop_all(void)
  {
    int nid;
+   struct access_record *rec;
+   struct hlist_node *tmp;
+   int bkt;
+ 
    del_timer_sync(&stats_timer);
    unregister_kprobe(&kp);
    
@@ -402,4 +423,10 @@
      if (tmemd_list[nid]) kthread_stop(tmemd_list[nid]);
    }
    uninstall_hooks(vmscan_hooks, ARRAY_SIZE(vmscan_hooks));
+ 
+   /* Clean up Hash Table */
+   hash_for_each_safe(access_map, bkt, tmp, rec, node) {
+     hash_del(&rec->node);
+     kfree(rec);
+   }
  }
