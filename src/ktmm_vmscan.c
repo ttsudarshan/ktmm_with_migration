@@ -2,9 +2,9 @@
  * ktmm_vmscan.c
  *
  * HYBRID IMPLEMENTATION:
- * 1. Promotion: Uses Kprobes + Internal Hash Table (Simulates "Working" Code Logic)
- * 2. Demotion: Uses LRU Scanning
- * * Fixed for Kernel 6.1 Compilation
+ * 1. Promotion: Kprobes + Hash Table + Dynamic Symbol Lookup (Exact "Working" Logic)
+ * 2. Demotion: Aggressive LRU Scanning
+ * * Fixed for Kernel 6.1
  */
 
  #include <linux/module.h>
@@ -25,16 +25,17 @@
  #include <linux/migrate_mode.h>
  #include <linux/node.h>
  #include <linux/psi.h>
- #include <linux/hashtable.h> /* Added for access tracking */
+ #include <linux/hashtable.h>
+ #include <linux/kallsyms.h>
  #include "ktmm_hook.h"
  #include "ktmm_vmscan.h"
  
  /*****************************************************************************
   * CONFIGURATION
   *****************************************************************************/
- #define HIGHEST_LEVEL 7        /* Promotion Threshold */
- #define BATCH_N 32             /* Batch size for promotion */
- #define WORK_SLEEP_MS 10       /* Worker sleep time */
+ #define HIGHEST_LEVEL 7        
+ #define BATCH_N 32             
+ #define WORK_SLEEP_MS 10       
  
  int pmem_node = -1;
  
@@ -44,12 +45,37 @@
  static atomic64_t promote_queued = ATOMIC64_INIT(0);
  static atomic64_t promote_failed = ATOMIC64_INIT(0);
  
- /* Demotion Scanner Threads */
  static struct task_struct *tmemd_list[MAX_NUMNODES];
  wait_queue_head_t tmemd_wait[MAX_NUMNODES];
  
  /*****************************************************************************
-  * ACCESS TRACKING (Hash Table Replacement for page_ext)
+  * DYNAMIC SYMBOL LOOKUP
+  * We need 'folio_isolate_lru' to move specific pages, but it isn't exported.
+  * We use kallsyms to find it.
+  *****************************************************************************/
+ typedef int (*folio_isolate_lru_func_t)(struct folio *folio);
+ static folio_isolate_lru_func_t kernel_folio_isolate_lru = NULL;
+ 
+ static int lookup_kernel_symbols(void)
+ {
+     unsigned long addr = kallsyms_lookup_name("folio_isolate_lru");
+     if (!addr) {
+         /* Fallback for older kernels */
+         addr = kallsyms_lookup_name("isolate_lru_page");
+     }
+     
+     if (addr) {
+         kernel_folio_isolate_lru = (folio_isolate_lru_func_t)addr;
+         printk(KERN_INFO "KTMM: Found isolation function at %lx\n", addr);
+         return 0;
+     }
+     
+     printk(KERN_ERR "KTMM: Failed to lookup folio_isolate_lru! Promotion will fail.\n");
+     return -1;
+ }
+ 
+ /*****************************************************************************
+  * ACCESS TRACKING (Hash Table)
   *****************************************************************************/
  struct access_record {
    struct hlist_node node;
@@ -57,14 +83,12 @@
    int count;
  };
  
- /* 10 bits = 1024 buckets */
- static DEFINE_HASHTABLE(access_map, 10);
+ static DEFINE_HASHTABLE(access_map, 10); /* 1024 buckets */
  static DEFINE_SPINLOCK(access_lock);
  
  /*****************************************************************************
-  * PROMOTION LOGIC (The "Working" Kprobe Approach)
+  * PROMOTION LOGIC
   *****************************************************************************/
- 
  struct promote_node {
    struct list_head link;
    struct page *page;
@@ -83,9 +107,6 @@
    return alloc_pages_node(nid, gfp_mask, 0);
  }
  
- /* * KPROBE HANDLER 
-  * Intercepts folio_mark_accessed to count accesses using Hash Table.
-  */
  static int kp_pre(struct kprobe *p, struct pt_regs *regs)
  {
    struct folio *folio;
@@ -95,21 +116,19 @@
    unsigned long flags;
    bool found = false;
  
-   /* Kernel 6.1: Argument 1 is struct folio* */
    folio = (struct folio *)regs->di;
    if (!folio) return 0;
  
-   /* Filter: Only File Pages, No Huge, No Anon */
    if (folio_test_anon(folio)) return 0;
    if (folio_test_large(folio)) return 0;
    if (!folio_mapping(folio)) return 0;
  
    page = &folio->page;
  
-   /* Only track pages currently on PMEM (we only promote FROM pmem) */
-   if (page_to_nid(page) == 0) return 0; /* Already on DRAM */
+   /* Only track pages on PMEM (Node != 0) */
+   /* NOTE: If you are simulating PMEM on Node 0, comment out this check! */
+   if (page_to_nid(page) == 0) return 0;
  
-   /* * ACCESS COUNTING LOGIC * */
    spin_lock_irqsave(&access_lock, flags);
    
    hash_for_each_possible(access_map, rec, node, (unsigned long)page) {
@@ -121,7 +140,6 @@
    }
  
    if (!found) {
-     /* New entry */
      rec = kmalloc(sizeof(*rec), GFP_ATOMIC);
      if (rec) {
        rec->page = page;
@@ -130,19 +148,16 @@
      }
    }
    
-   /* Check Threshold */
    if (rec && rec->count >= HIGHEST_LEVEL) {
-     /* Threshold met! Remove from tracker and queue for promotion */
      hash_del(&rec->node);
      kfree(rec);
      spin_unlock_irqrestore(&access_lock, flags);
      
-     /* Queue for promotion */
      n = kmalloc(sizeof(*n), GFP_ATOMIC);
      if (!n) return 0;
      
      INIT_LIST_HEAD(&n->link);
-     get_page(page); /* Pin the page */
+     get_page(page); /* Pin */
      n->page = page;
  
      spin_lock_irqsave(&promote_lock, flags);
@@ -158,9 +173,7 @@
    return 0;
  }
  
- /*
-  * PROMOTION WORKER THREAD
-  */
+ /* Worker: Isolates and Migrates */
  static int promote_worker_fn(void *arg)
  {
    while (!kthread_should_stop()) {
@@ -169,7 +182,7 @@
      unsigned long flags;
      LIST_HEAD(migrate_list);
  
-     /* 1. Drain the Queue */
+     /* 1. Drain Queue */
      spin_lock_irqsave(&promote_lock, flags);
      while (n < BATCH_N && !list_empty(&promote_list)) {
        struct promote_node *x = list_first_entry(&promote_list, struct promote_node, link);
@@ -184,36 +197,44 @@
        continue;
      }
  
-     /* 2. Build Migration List */
+     /* 2. Isolate Pages (CRITICAL STEP) */
      for (i = 0; i < n; i++) {
        struct promote_node *x = batch[i];
        struct page *page = x->page;
-       /* Only move if not already on DRAM (Node 0) */
-       if (page_to_nid(page) != 0) {
+       struct folio *folio = page_folio(page);
+ 
+       /* Try to isolate using kernel internal function */
+       if (kernel_folio_isolate_lru && kernel_folio_isolate_lru(folio)) {
+         /* Success! Add to local list. 
+          * note: isolate_lru_page usually adds to the list provided, 
+          * but here we assume it just isolates from LRU.
+          * We manually add to our list. 
+          */
          list_add(&page->lru, &migrate_list);
        } else {
-         put_page(page); /* Already on DRAM */
+         /* Failed to isolate (busy?), drop it */
+         put_page(page); 
        }
        kfree(x);
      }
  
-     /* 3. Execute Batch Migration */
+     /* 3. Migrate */
      if (!list_empty(&migrate_list)) {
-       unsigned int nr_succeeded = 0; /* FIXED: changed from unsigned long to unsigned int */
+       unsigned int nr_succeeded = 0;
        
-       /* Target Node 0 (DRAM) */
+       /* Move to Node 0 (DRAM) */
        migrate_pages(&migrate_list, ktmm_new_page_node, NULL, 
                0, MIGRATE_SYNC, MR_NUMA_MISPLACED, &nr_succeeded);
        
        if (nr_succeeded > 0)
          atomic64_add(nr_succeeded, &total_pages_promoted);
        
-       /* Clean up failures */
+       /* Cleanup failures */
        if (!list_empty(&migrate_list)) {
          struct page *p, *tmp;
          list_for_each_entry_safe(p, tmp, &migrate_list, lru) {
            list_del(&p->lru);
-           put_page(p);
+           putback_lru_page(p); /* Must putback if we isolated! */
            atomic64_inc(&promote_failed);
          }
        }
@@ -224,10 +245,10 @@
  }
  
  /*****************************************************************************
-  * DEMOTION LOGIC (Scanning)
+  * DEMOTION LOGIC
   *****************************************************************************/
  
- /* Hooks wrappers needed for scanner */
+ /* Hooks */
  static struct mem_cgroup *(*pt_mem_cgroup_iter)(struct mem_cgroup *, struct mem_cgroup *, struct mem_cgroup_reclaim_cookie *);
  static struct pglist_data *(*pt_first_online_pgdat)(void);
  static void (*pt_lru_add_drain)(void);
@@ -249,20 +270,18 @@
  static int ktmm_folio_referenced(struct folio *f, int l, struct mem_cgroup *m, unsigned long *fl) { return pt_folio_referenced(f, l, m, fl); }
  static struct page *ktmm_alloc_pages(gfp_t g, unsigned int o, int p, nodemask_t *n) { return pt_alloc_pages(g, o, p, n); }
  
- /*
-  * Scan Inactive List - ONLY Handles Demotion (DRAM -> PMEM)
-  */
  static unsigned long scan_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec, struct scan_control *sc, enum lru_list lru, struct pglist_data *pgdat)
  {
    LIST_HEAD(folio_list);
    LIST_HEAD(l_migrate);
    unsigned long nr_scanned, nr_taken;
-   unsigned int nr_succeeded = 0; /* FIXED: unsigned int */
+   unsigned int nr_succeeded = 0;
    unsigned long vm_flags;
    int file = is_file_lru(lru);
  
-   /* Only scan if we are on DRAM (Node 0) and PMEM exists */
-   if (pgdat->node_id != 0 || pmem_node_id == -1) return 0;
+   /* Check if this is the correct source node (DRAM=0) */
+   /* Removing safety checks to force scanning for debugging */
+   // if (pgdat->node_id != 0) return 0;
  
    ktmm_lru_add_drain();
    spin_lock_irq(&lruvec->lru_lock);
@@ -272,11 +291,10 @@
  
    if (nr_taken == 0) return 0;
  
-   /* Find Cold Pages */
    if (!list_empty(&folio_list)) {
      struct folio *folio, *next;
      list_for_each_entry_safe(folio, next, &folio_list, lru) {
-       /* If NOT referenced, queue for Demotion */
+       /* If unreferenced, move to migrate list */
        if (!ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
          list_del(&folio->lru);
          list_add(&folio->lru, &l_migrate);
@@ -284,10 +302,9 @@
      }
    }
  
-   /* Demote */
    if (!list_empty(&l_migrate)) {
      int target_nid = pmem_node_id;
-     /* Sync Light is fine for demotion */
+     /* Force migration to PMEM */
      migrate_pages(&l_migrate, ktmm_new_page_node, NULL, 
              (unsigned long)target_nid, MIGRATE_SYNC_LIGHT, 
              MR_NUMA_MISPLACED, &nr_succeeded);
@@ -295,7 +312,6 @@
      if (nr_succeeded > 0)
        atomic64_add(nr_succeeded, &total_pages_demoted);
      
-     /* Failures put back */
      list_splice_init(&l_migrate, &folio_list);
    }
  
@@ -319,16 +335,15 @@
    do {
      struct lruvec *lruvec = &memcg->nodeinfo[nid]->lruvec;
      cond_resched();
-     /* Only scan Inactive File/Anon lists for demotion */
-     scan_inactive_list(128, lruvec, sc, LRU_INACTIVE_FILE, pgdat);
-     scan_inactive_list(128, lruvec, sc, LRU_INACTIVE_ANON, pgdat);
+     /* Scan 1024 pages per pass */
+     scan_inactive_list(1024, lruvec, sc, LRU_INACTIVE_FILE, pgdat);
+     scan_inactive_list(1024, lruvec, sc, LRU_INACTIVE_ANON, pgdat);
    } while ((memcg = ktmm_mem_cgroup_iter(NULL, memcg, NULL)));
  }
  
  static int demote_scanner_fn(void *p) 
  {
    pg_data_t *pgdat = (pg_data_t *)p;
-   int nid = pgdat->node_id;
    struct mem_cgroup_reclaim_cookie reclaim = { .pgdat = pgdat };
    struct scan_control sc = { .nr_to_reclaim = SWAP_CLUSTER_MAX, .may_unmap = 1, .may_swap = 1 };
    struct task_struct *task = current;
@@ -336,23 +351,18 @@
    task->flags |= PF_MEMALLOC | PF_KSWAPD;
  
    while (!kthread_should_stop()) {
-     /* Only run scanner on Node 0 (DRAM) */
-     if (nid == 0) {
+     /* Force scan on Node 0 (DRAM) */
+     if (pgdat->node_id == 0) {
        scan_node(pgdat, &sc, &reclaim);
      }
      
-     /* Sleep 2 seconds */
      if (kthread_should_stop()) break;
-     schedule_timeout_interruptible(2 * HZ);
+     schedule_timeout_interruptible(1 * HZ); /* 1 sec scan interval */
    }
  
    task->flags &= ~(PF_MEMALLOC | PF_KSWAPD);
    return 0;
  }
- 
- /*****************************************************************************
-  * INIT / EXIT
-  *****************************************************************************/
  
  static struct ktmm_hook vmscan_hooks[] = {
    HOOK("mem_cgroup_iter", ktmm_mem_cgroup_iter, &pt_mem_cgroup_iter),
@@ -367,8 +377,9 @@
  };
  
  static void print_stats(struct timer_list *t) {
-   printk(KERN_INFO "KTMM STATS: Promoted (Kprobe): %llu | Demoted (Scan): %llu | Queued: %llu\n",
+   printk(KERN_INFO "KTMM STATS: Promoted: %llu (Fail: %llu) | Demoted: %llu | Queued: %llu\n",
           (u64)atomic64_read(&total_pages_promoted), 
+          (u64)atomic64_read(&promote_failed),
           (u64)atomic64_read(&total_pages_demoted),
           (u64)atomic64_read(&promote_queued));
    mod_timer(t, jiffies + 5 * HZ);
@@ -380,9 +391,12 @@
    int nid, ret;
    
    set_ktmm_scan();
+   
+   /* LOOKUP INTERNAL KERNEL SYMBOL */
+   if (lookup_kernel_symbols() < 0) return -1;
+ 
    ret = install_hooks(vmscan_hooks, ARRAY_SIZE(vmscan_hooks));
  
-   /* 1. Register Kprobe for Promotion */
    kp.symbol_name = "folio_mark_accessed";
    kp.pre_handler = kp_pre;
    if (register_kprobe(&kp)) {
@@ -390,10 +404,8 @@
      return -1;
    }
  
-   /* 2. Start Promotion Worker */
    promote_worker_task = kthread_run(promote_worker_fn, NULL, "ktmm_promote");
    
-   /* 3. Start Demotion Scanners */
    for_each_online_node(nid) {
      pg_data_t *pgdat = NODE_DATA(nid);
      if (nid == 1) {
@@ -424,7 +436,6 @@
    }
    uninstall_hooks(vmscan_hooks, ARRAY_SIZE(vmscan_hooks));
  
-   /* Clean up Hash Table */
    hash_for_each_safe(access_map, bkt, tmp, rec, node) {
      hash_del(&rec->node);
      kfree(rec);

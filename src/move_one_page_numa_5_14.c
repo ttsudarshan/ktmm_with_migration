@@ -13,7 +13,7 @@
 #include <linux/huge_mm.h>
 #include <linux/list.h>
 #include <linux/spinlock.h>
-#include <linux/slab.h>
+#include <linux/slab.h>g
 #include <linux/kthread.h>
 #include <linux/delay.h>
 #include <linux/sched.h>
