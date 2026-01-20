@@ -2,9 +2,9 @@
  * ktmm_vmscan.c
  *
  * HYBRID IMPLEMENTATION:
- * 1. Promotion: Kprobes + Hash Table + Dynamic Symbol Lookup (Exact "Working" Logic)
+ * 1. Promotion: Kprobes + Hash Table + Dynamic Symbol Lookup (Backdoor Method)
  * 2. Demotion: Aggressive LRU Scanning
- * * Fixed for Kernel 6.1 (dynamic lookup for isolate/putback)
+ * * Fixed for Kernel 6.1 (Solves modpost & implicit declaration errors)
  */
 
  #include <linux/module.h>
@@ -26,7 +26,6 @@
  #include <linux/node.h>
  #include <linux/psi.h>
  #include <linux/hashtable.h>
- #include <linux/kallsyms.h>
  #include "ktmm_hook.h"
  #include "ktmm_vmscan.h"
  
@@ -49,32 +48,66 @@
  wait_queue_head_t tmemd_wait[MAX_NUMNODES];
  
  /*****************************************************************************
-  * DYNAMIC SYMBOL LOOKUP
-  * We need internal functions to move specific pages.
+  * DYNAMIC SYMBOL LOOKUP (The "Backdoor" Fix)
   *****************************************************************************/
+ typedef unsigned long (*kallsyms_lookup_name_t)(const char *name);
+ static kallsyms_lookup_name_t kallsyms_lookup_name_ptr = NULL;
+ 
+ /* Internal function pointers */
  typedef int (*folio_isolate_lru_func_t)(struct folio *folio);
  typedef void (*folio_putback_lru_func_t)(struct folio *folio);
  
  static folio_isolate_lru_func_t kernel_folio_isolate_lru = NULL;
  static folio_putback_lru_func_t kernel_folio_putback_lru = NULL;
  
- static int lookup_kernel_symbols(void)
- {
-     unsigned long isolate_addr = kallsyms_lookup_name("folio_isolate_lru");
-     unsigned long putback_addr = kallsyms_lookup_name("folio_putback_lru");
+ /* * TRICK: Register a kprobe on 'kallsyms_lookup_name' to get its address,
+  * because the symbol itself is not exported in Kernel 6.1+.
+  */
+ static struct kprobe kp_lookup = {
+     .symbol_name = "kallsyms_lookup_name",
+ };
  
-     /* Fallback for older kernels or alternate naming */
-     if (!isolate_addr) isolate_addr = kallsyms_lookup_name("isolate_lru_page");
-     if (!putback_addr) putback_addr = kallsyms_lookup_name("putback_lru_page");
+ static int resolve_kallsyms(void)
+ {
+     int ret = register_kprobe(&kp_lookup);
+     if (ret < 0) {
+         pr_err("KTMM: Failed to probe kallsyms_lookup_name, ret=%d\n", ret);
+         return ret;
+     }
+     
+     kallsyms_lookup_name_ptr = (kallsyms_lookup_name_t)kp_lookup.addr;
+     unregister_kprobe(&kp_lookup);
+     
+     if (!kallsyms_lookup_name_ptr) {
+         pr_err("KTMM: Could not retrieve kallsyms_lookup_name address\n");
+         return -EFAULT;
+     }
+     
+     pr_info("KTMM: kallsyms_lookup_name found at %px\n", kallsyms_lookup_name_ptr);
+     return 0;
+ }
+ 
+ static int lookup_internal_functions(void)
+ {
+     unsigned long isolate_addr, putback_addr;
+ 
+     if (resolve_kallsyms() < 0) return -1;
+ 
+     isolate_addr = kallsyms_lookup_name_ptr("folio_isolate_lru");
+     putback_addr = kallsyms_lookup_name_ptr("folio_putback_lru");
+ 
+     /* Fallback for older/alternate names */
+     if (!isolate_addr) isolate_addr = kallsyms_lookup_name_ptr("isolate_lru_page");
+     if (!putback_addr) putback_addr = kallsyms_lookup_name_ptr("putback_lru_page");
      
      if (isolate_addr && putback_addr) {
          kernel_folio_isolate_lru = (folio_isolate_lru_func_t)isolate_addr;
          kernel_folio_putback_lru = (folio_putback_lru_func_t)putback_addr;
-         printk(KERN_INFO "KTMM: Symbols found. Isolate: %lx, Putback: %lx\n", isolate_addr, putback_addr);
+         pr_info("KTMM: Symbols found. Isolate: %lx, Putback: %lx\n", isolate_addr, putback_addr);
          return 0;
      }
      
-     printk(KERN_ERR "KTMM: Failed to lookup LRU symbols! Promotion will fail.\n");
+     pr_err("KTMM: Failed to lookup LRU symbols! Promotion will fail.\n");
      return -1;
  }
  
@@ -233,7 +266,7 @@
          list_for_each_entry_safe(p, tmp, &migrate_list, lru) {
            list_del(&p->lru);
            
-           /* FIX: Use dynamic putback function */
+           /* Use dynamic putback */
            if (kernel_folio_putback_lru)
              kernel_folio_putback_lru(page_folio(p));
            else
@@ -396,7 +429,7 @@
    set_ktmm_scan();
    
    /* LOOKUP INTERNAL KERNEL SYMBOLS */
-   if (lookup_kernel_symbols() < 0) return -1;
+   if (lookup_internal_functions() < 0) return -1;
  
    ret = install_hooks(vmscan_hooks, ARRAY_SIZE(vmscan_hooks));
  
