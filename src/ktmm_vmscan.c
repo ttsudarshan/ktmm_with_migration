@@ -3,7 +3,7 @@
  *
  * Page scanning and related functions.
  * Updated for Linux Kernel 6.1
- * FIXED: Soft Lockup/Freezes, Compilation Errors, and Migration Signature
+ * FIXED: 1:1 Ratio Stall (Force Promotion Success)
  */
 
  #include <linux/atomic.h>
@@ -64,7 +64,7 @@
  
  /* Balance Counter for 1:1 Ratio Enforcement */
  static atomic64_t migration_balance = ATOMIC64_INIT(0);
- #define BALANCE_THRESHOLD 512
+ #define BALANCE_THRESHOLD 128 /* Tighter threshold to force 1:1 sooner */
  
  static atomic64_t pages_inactive_to_active = ATOMIC64_INIT(0);   
  static atomic64_t pages_active_to_inactive = ATOMIC64_INIT(0);   
@@ -84,8 +84,6 @@
    u64 demoted = atomic64_read(&total_pages_demoted);
    s64 balance = atomic64_read(&migration_balance);
  
-   u64 inactive_to_active = atomic64_read(&pages_inactive_to_active);
-   u64 active_to_inactive = atomic64_read(&pages_active_to_inactive);
    u64 active_to_promote = atomic64_read(&pages_active_to_promote);
    u64 promote_to_dram = atomic64_read(&pages_promote_to_dram);
    u64 promote_failed = atomic64_read(&pages_promote_failed);
@@ -199,12 +197,14 @@
  /*
   * ktmm_new_page_node - Callback for migrate_pages
   * Allocates a new page on the specified node.
-  * FIXED: Uses struct page* signature to match Kernel 6.1 migrate_pages requirements.
   */
  static struct page *ktmm_new_page_node(struct page *src, unsigned long private)
  {
    int nid = (int)private;
-   gfp_t gfp_mask = GFP_HIGHUSER_MOVABLE | __GFP_THISNODE;
+   /* * FIXED: Use GFP_KERNEL to allow reclaim/compaction if DRAM is full. 
+    * This is critical for Promotion to succeed.
+    */
+   gfp_t gfp_mask = GFP_KERNEL | __GFP_HIGH | __GFP_MOVABLE | __GFP_THISNODE;
    struct page *newpage;
  
    newpage = alloc_pages_node(nid, gfp_mask, 0);
@@ -262,7 +262,7 @@
    LIST_HEAD(l_migrate);
    int file = is_file_lru(lru);
  
-   /* 1:1 Ratio Check */
+   /* 1:1 Ratio Check - If we are ahead on promotion, wait. */
    if (atomic64_read(&migration_balance) > BALANCE_THRESHOLD) {
      return;
    }
@@ -280,6 +280,7 @@
    if (nr_taken == 0)
      return;
  
+   /* Prepare list for migration */
    if (!list_empty(&l_hold)) {
      struct folio *folio, *next;
      list_for_each_entry_safe(folio, next, &l_hold, lru) {
@@ -288,32 +289,39 @@
      }
    }
  
+   /* Perform Batch Migration */
    if (!list_empty(&l_migrate)) {
      int target_nid = 0; /* Target DRAM */
      int ret;
  
-     /* FIXED: Use ktmm_new_page_node and MIGRATE_SYNC_LIGHT */
+     /* * FIXED: MIGRATE_SYNC forces dirty pages to write back. 
+      * This prevents promotions from silently failing on dirty file pages.
+      */
      ret = migrate_pages(&l_migrate, ktmm_new_page_node, NULL, 
-             (unsigned long)target_nid, MIGRATE_SYNC_LIGHT, 
+             (unsigned long)target_nid, MIGRATE_SYNC, 
              MR_NUMA_MISPLACED, (unsigned int *)&nr_succeeded);
  
      if (nr_succeeded > 0) {
        __mod_node_page_state(pgdat, NR_PROMOTED, nr_succeeded);
        atomic64_add(nr_succeeded, &total_pages_promoted);
        atomic64_add(nr_succeeded, &pages_promote_to_dram);
+       
+       /* Adjust balance: Promotion increases positive balance */
        atomic64_add(nr_succeeded, &migration_balance);
      }
      
+     /* Count failures and clean up */
      if (!list_empty(&l_migrate)) {
-       /* Failed pages */
        unsigned long failed = 0;
        struct folio *f;
        list_for_each_entry(f, &l_migrate, lru) failed++;
        atomic64_add(failed, &pages_promote_failed);
+       
        list_splice_init(&l_migrate, &l_hold);
      }
    }
  
+   /* Put back any pages */
    spin_lock_irq(&lruvec->lru_lock);
    ktmm_move_folios_to_lru(lruvec, &l_hold);
    __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
@@ -357,10 +365,8 @@
    while (!list_empty(&l_hold)) {
      struct folio *folio;
  
-     /* FIXED: Avoid freeze if list is huge */
      cond_resched();
  
-     /* FIXED: Replaced lru_to_folio with standard list_first_entry */
      folio = list_first_entry(&l_hold, struct folio, lru);
      list_del(&folio->lru);
  
@@ -369,7 +375,7 @@
        continue;
      }
  
-     // node migration check for PMEM node
+     /* PMEM Node: Check for Hot Pages to Promote */
      if (pgdat->pm_node != 0) {
        if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
          folio_set_promote(folio);
@@ -426,7 +432,7 @@
    unsigned long vm_flags;
    bool file = is_file_lru(lru);
  
-   /* 1:1 Ratio Check for Demotion */
+   /* 1:1 Ratio Check - If we are ahead on demotion, wait for promotion to catch up. */
    bool allow_demotion = true;
    if (atomic64_read(&migration_balance) < -BALANCE_THRESHOLD) {
      allow_demotion = false;
@@ -444,11 +450,12 @@
  
    atomic64_add(nr_taken, &pages_scanned_inactive);
  
+   /* Check referenced bits */
    if (pgdat->pm_node != 0) {
-     /* PMEM NODE: Activate referenced pages */
+     /* PMEM: Activate referenced pages (path to promotion) */
      struct folio *folio, *next;
      list_for_each_entry_safe(folio, next, &folio_list, lru) {
-       cond_resched(); /* Prevent lockup */
+       cond_resched();
        if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
          list_del(&folio->lru);
          folio_set_active(folio);
@@ -458,10 +465,10 @@
        }
      }
    } else if (pgdat->pm_node == 0 && pmem_node_id != -1 && allow_demotion) {
-     /* DRAM NODE: Demote cold pages */
+     /* DRAM: Demote cold pages */
      struct folio *folio, *next;
      list_for_each_entry_safe(folio, next, &folio_list, lru) {
-       cond_resched(); /* Prevent lockup */
+       cond_resched();
        if (!ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
          list_del(&folio->lru);
          list_add(&folio->lru, &l_migrate);
@@ -469,21 +476,23 @@
      }
    }
  
+   /* Perform Demotion Migration */
    if (!list_empty(&l_migrate)) {
      int target_nid = pmem_node_id;
      int ret;
  
-     /* FIXED: Use ktmm_new_page_node and MIGRATE_SYNC_LIGHT */
+     /* Demotion is usually easier, but SYNC ensures we don't stall on dirty pages */
      ret = migrate_pages(&l_migrate, ktmm_new_page_node, NULL,
-             (unsigned long)target_nid, MIGRATE_SYNC_LIGHT,
+             (unsigned long)target_nid, MIGRATE_SYNC,
              MR_NUMA_MISPLACED, (unsigned int *)&nr_succeeded);
  
      if (nr_succeeded > 0) {
        __mod_node_page_state(pgdat, NR_DEMOTED, nr_succeeded);
        atomic64_add(nr_succeeded, &total_pages_demoted);
+       /* Demotion makes balance negative */
        atomic64_sub(nr_succeeded, &migration_balance);
      }
-     /* Failures put back automatically by splice below */
+     
      list_splice_init(&l_migrate, &folio_list);
    }
    
@@ -537,7 +546,6 @@
    do {
      struct lruvec *lruvec = &memcg->nodeinfo[nid]->lruvec;
  
-     /* FIXED: Crucial yield to prevent VM freeze during heavy MemCG iteration */
      cond_resched();
  
      if (ktmm_cgroup_below_min(memcg)) {
