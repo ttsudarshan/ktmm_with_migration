@@ -223,20 +223,18 @@ static int ktmm_folio_referenced(struct folio *folio, int is_locked,
  *****************************************************************************/
 
 /*
- * alloc_migration_target - Callback for migrate_pages
+ * ktmm_new_page_node - Callback for migrate_pages
  * Allocates a new page on the specified node.
+ * * FIX: Must use struct page* signature to match new_page_t in migrate.h
  */
-static struct folio *alloc_migration_target(struct folio *src, unsigned long private)
+static struct page *ktmm_new_page_node(struct page *src, unsigned long private)
 {
 	int nid = (int)private;
 	gfp_t gfp_mask = GFP_HIGHUSER_MOVABLE | __GFP_THISNODE;
 	struct page *newpage;
 
 	newpage = alloc_pages_node(nid, gfp_mask, 0);
-	if (!newpage)
-		return NULL;
-	
-	return page_folio(newpage);
+	return newpage;
 }
 
 static struct page *ktmm_alloc_pages(gfp_t gfp_mask, unsigned int order, int preferred_nid,
@@ -328,8 +326,9 @@ static void scan_promote_list(unsigned long nr_to_scan,
 
 		/* * MIGRATE_SYNC_LIGHT: Async but waits for some locks. 
 		 * Reduces freezing compared to SYNC.
+		 * * FIX: Using ktmm_new_page_node to match signature.
 		 */
-		ret = migrate_pages(&l_migrate, alloc_migration_target, NULL, 
+		ret = migrate_pages(&l_migrate, ktmm_new_page_node, NULL, 
 				    (unsigned long)target_nid, MIGRATE_SYNC_LIGHT, 
 				    MR_NUMA_MISPLACED, (unsigned int *)&nr_succeeded);
 
@@ -524,7 +523,8 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 		int target_nid = pmem_node_id;
 		int ret;
 
-		ret = migrate_pages(&l_migrate, alloc_migration_target, NULL,
+		/* FIX: Using ktmm_new_page_node to match signature */
+		ret = migrate_pages(&l_migrate, ktmm_new_page_node, NULL,
 				    (unsigned long)target_nid, MIGRATE_SYNC_LIGHT,
 				    MR_NUMA_MISPLACED, (unsigned int *)&nr_succeeded);
 
