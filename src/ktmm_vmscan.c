@@ -331,7 +331,7 @@ static int ktmm_folio_referenced(struct folio *folio, int is_locked,
 static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, const char *location)
 {
     int was_accessed;
-    const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
+    __maybe_unused const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
     
     /* Check the referenced flag */
     was_accessed = folio_test_referenced(folio);
@@ -413,8 +413,6 @@ static void ktmm_free_migration_page(struct page *page, unsigned long private)
  */
 static bool ktmm_folio_migratable(struct folio *folio)
 {
-	struct page *page = &folio->page;
-
 	/* Skip anonymous pages - they have complex COW semantics */
 	if (folio_test_anon(folio)) {
 		atomic64_inc(&migrate_filter_anon);
@@ -454,11 +452,14 @@ static bool ktmm_folio_migratable(struct folio *folio)
  *   0 on success
  *   >0 number of pages that failed to migrate
  *   <0 -errno on error
+ *
+ * Note: Currently unused - using ktmm_migrate_folios_bulk() instead.
+ *       Kept for potential single-folio migration needs.
  */
-static int ktmm_migrate_folio_to_node(struct folio *folio, int target_nid)
+static __maybe_unused int ktmm_migrate_folio_to_node(struct folio *folio, int target_nid)
 {
-	struct page *page = &folio->page;
 	LIST_HEAD(migrate_list);
+	unsigned int nr_succeeded = 0;
 	int ret;
 
 	/* Verify folio is suitable for migration */
@@ -489,17 +490,20 @@ static int ktmm_migrate_folio_to_node(struct folio *folio, int target_nid)
 	 * In kernel 6.1, signature is:
 	 * int migrate_pages(struct list_head *l, new_page_t get_new_page,
 	 *                   free_page_t put_new_page, unsigned long private,
-	 *                   enum migrate_mode mode, int reason);
+	 *                   enum migrate_mode mode, int reason,
+	 *                   unsigned int *ret_succeeded);
 	 *
 	 * - MIGRATE_SYNC: Synchronous migration (wait for completion)
 	 * - MR_NUMA_MISPLACED: Reason code for NUMA balancing/tiering
+	 * - &nr_succeeded: Output parameter for successful migrations
 	 */
 	ret = migrate_pages(&migrate_list,
 			    ktmm_alloc_migration_page,
 			    ktmm_free_migration_page,
 			    (unsigned long)target_nid,
 			    MIGRATE_SYNC,
-			    MR_NUMA_MISPLACED);
+			    MR_NUMA_MISPLACED,
+			    &nr_succeeded);
 
 	/*
 	 * Handle any pages left in the list (migration failures).
@@ -510,12 +514,12 @@ static int ktmm_migrate_folio_to_node(struct folio *folio, int target_nid)
 
 		list_for_each_entry_safe(f, next, &migrate_list, lru) {
 			list_del_init(&f->lru);
-			folio_putback_lru(f);  /* Returns to LRU, drops isolate ref */
+			ktmm_folio_putback_lru(f);  /* Returns to LRU, drops isolate ref */
 		}
 	}
 
-	if (ret == 0) {
-		atomic64_inc(&migrate_pages_success);
+	if (nr_succeeded > 0) {
+		atomic64_add(nr_succeeded, &migrate_pages_success);
 	}
 
 	return ret;
@@ -547,6 +551,7 @@ static int ktmm_migrate_folios_bulk(struct list_head *folio_list, int target_nid
 	int n_isolated = 0;
 	int ret;
 	int n_success = 0;
+	unsigned int nr_succeeded = 0;
 
 	/*
 	 * First pass: filter and prepare folios for migration.
@@ -578,20 +583,29 @@ static int ktmm_migrate_folios_bulk(struct list_head *folio_list, int target_nid
 
 	atomic64_add(n_isolated, &migrate_pages_attempted);
 
-	/* Single migrate_pages() call for all isolated folios */
+	/*
+	 * Single migrate_pages() call for all isolated folios.
+	 *
+	 * Kernel 6.1 signature:
+	 * int migrate_pages(struct list_head *l, new_page_t get_new_page,
+	 *                   free_page_t put_new_page, unsigned long private,
+	 *                   enum migrate_mode mode, int reason,
+	 *                   unsigned int *ret_succeeded);
+	 */
 	ret = migrate_pages(&migrate_list,
 			    ktmm_alloc_migration_page,
 			    ktmm_free_migration_page,
 			    (unsigned long)target_nid,
 			    MIGRATE_SYNC,
-			    MR_NUMA_MISPLACED);
+			    MR_NUMA_MISPLACED,
+			    &nr_succeeded);
 
 	/*
-	 * Calculate successes: n_isolated - failures
-	 * ret is the number that FAILED (or negative error)
+	 * nr_succeeded tells us exactly how many pages migrated successfully.
+	 * ret is the number that FAILED (or negative error).
 	 */
-	if (ret >= 0) {
-		n_success = n_isolated - ret;
+	n_success = nr_succeeded;
+	if (n_success > 0) {
 		atomic64_add(n_success, &migrate_pages_success);
 	}
 
@@ -601,7 +615,7 @@ static int ktmm_migrate_folios_bulk(struct list_head *folio_list, int target_nid
 
 		list_for_each_entry_safe(f, n, &migrate_list, lru) {
 			list_del_init(&f->lru);
-			folio_putback_lru(f);
+			ktmm_folio_putback_lru(f);  /* Use hooked version */
 		}
 	}
 
@@ -910,7 +924,7 @@ static void scan_active_list(unsigned long nr_to_scan,
 	unsigned nr_deactivate, nr_activate, nr_promote;
 	unsigned nr_rotated = 0;
 	int file = is_file_lru(lru);
-	int nid = pgdat->node_id;
+	__maybe_unused int nid = pgdat->node_id;
 	
 	//pr_info("scanning active list");
 
@@ -1054,11 +1068,11 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	unsigned long nr_taken = 0;
 	unsigned long nr_migrated = 0;
 	unsigned long nr_isolated = 0;
-	unsigned long nr_reclaimed = 0;
+	__maybe_unused unsigned long nr_reclaimed = 0;
 	unsigned long nr_activate = 0;
 	unsigned long vm_flags;
 	bool file = is_file_lru(lru);
-	int nid = pgdat->node_id;
+	__maybe_unused int nid = pgdat->node_id;
 	//pr_info("scanning inactive list");
 
 	// make sure pages in per-cpu lru list are added
