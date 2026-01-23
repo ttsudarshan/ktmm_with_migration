@@ -3,11 +3,12 @@
  *
  *  Page scanning and related functions.
  *
- *  Migration logic adapted EXACTLY from uts_migrate.c (kernel 5.14) for kernel 6.1
+ *  Migration logic adapted from uts_migrate.c (kernel 5.14) for kernel 6.1
  *  ONLY migrates file-backed pages (skips anonymous pages)
  *
- *  KEY FIX: ktmm_alloc_migrate_page() calls pt_alloc_pages DIRECTLY to
- *  bypass the hooked __alloc_pages and avoid nodemask corruption.
+ *  KEY FIX v6: Promote directly from scan_active_list() instead of using
+ *  broken promote list. The promote LRU doesn't work because
+ *  ktmm_move_folios_to_lru() puts pages back on their natural LRU.
  */
 
  #include <linux/atomic.h>
@@ -69,13 +70,8 @@
  
  static atomic64_t pages_inactive_to_active = ATOMIC64_INIT(0);
  static atomic64_t pages_active_to_inactive = ATOMIC64_INIT(0);
- static atomic64_t pages_active_to_promote = ATOMIC64_INIT(0);
- static atomic64_t pages_promote_to_dram = ATOMIC64_INIT(0);
- static atomic64_t pages_promote_failed = ATOMIC64_INIT(0);
- 
  static atomic64_t pages_scanned_inactive = ATOMIC64_INIT(0);
  static atomic64_t pages_scanned_active = ATOMIC64_INIT(0);
- static atomic64_t pages_scanned_promote = ATOMIC64_INIT(0);
  
  /* Migration debug counters */
  static atomic64_t migrate_filter_anon = ATOMIC64_INIT(0);
@@ -84,6 +80,10 @@
  static atomic64_t migrate_attempted = ATOMIC64_INIT(0);
  static atomic64_t migrate_success = ATOMIC64_INIT(0);
  static atomic64_t migrate_alloc_fail = ATOMIC64_INIT(0);
+ 
+ /* Promotion/demotion attempt counters */
+ static atomic64_t promote_candidates = ATOMIC64_INIT(0);
+ static atomic64_t demote_candidates = ATOMIC64_INIT(0);
  
  static struct timer_list page_stats_timer;
  
@@ -94,12 +94,8 @@
  
    u64 inactive_to_active = atomic64_read(&pages_inactive_to_active);
    u64 active_to_inactive = atomic64_read(&pages_active_to_inactive);
-   u64 active_to_promote = atomic64_read(&pages_active_to_promote);
-   u64 promote_to_dram = atomic64_read(&pages_promote_to_dram);
-   u64 promote_failed = atomic64_read(&pages_promote_failed);
    u64 scanned_inactive = atomic64_read(&pages_scanned_inactive);
    u64 scanned_active = atomic64_read(&pages_scanned_active);
-   u64 scanned_promote = atomic64_read(&pages_scanned_promote);
  
    u64 filter_anon = atomic64_read(&migrate_filter_anon);
    u64 filter_compound = atomic64_read(&migrate_filter_compound);
@@ -108,16 +104,19 @@
    u64 mig_success = atomic64_read(&migrate_success);
    u64 alloc_fail = atomic64_read(&migrate_alloc_fail);
  
+   u64 promo_cand = atomic64_read(&promote_candidates);
+   u64 demo_cand = atomic64_read(&demote_candidates);
+ 
    printk(KERN_INFO "*** KTMM PAGE STATS: Total Promoted: %llu, Total Demoted: %llu ***\n",
           promoted, demoted);
  
    printk(KERN_INFO "*** KTMM PAGE FLOW DEBUG ***\n");
-   printk(KERN_INFO "  Scanned: inactive=%llu, active=%llu, promote=%llu\n",
-          scanned_inactive, scanned_active, scanned_promote);
+   printk(KERN_INFO "  Scanned: inactive=%llu, active=%llu\n",
+          scanned_inactive, scanned_active);
    printk(KERN_INFO "  Flow: inactive->active=%llu, active->inactive=%llu\n",
           inactive_to_active, active_to_inactive);
-   printk(KERN_INFO "  Flow: active->promote=%llu, promote->DRAM=%llu (failed=%llu)\n",
-          active_to_promote, promote_to_dram, promote_failed);
+   printk(KERN_INFO "  Candidates: promote=%llu, demote=%llu\n",
+          promo_cand, demo_cand);
  
    printk(KERN_INFO "*** KTMM MIGRATION DEBUG ***\n");
    printk(KERN_INFO "  Filtered: anon=%llu, compound=%llu, no_mapping=%llu\n",
@@ -240,19 +239,13 @@
  
  
  /*****************************************************************************
-  * MIGRATION FUNCTIONS - EXACT copy of uts_migrate.c logic for kernel 6.1
-  *
-  * CRITICAL FIX: Uses pt_alloc_pages DIRECTLY to bypass the hooked __alloc_pages.
-  * This avoids the nodemask corruption bug.
+  * MIGRATION FUNCTIONS - Adapted from uts_migrate.c for kernel 6.1
   *****************************************************************************/
  
  /**
   * ktmm_alloc_migrate_page - Allocate page on target node for migration
   *
-  * EXACT same logic as uts_alloc_migrate_page() from uts_migrate.c:
-  *   newp = alloc_pages_node(nid, GFP_HIGHUSER_MOVABLE | __GFP_THISNODE, 0);
-  *
-  * BUT: We call pt_alloc_pages DIRECTLY to bypass our hooked __alloc_pages!
+  * Calls pt_alloc_pages DIRECTLY to bypass our hooked __alloc_pages.
   */
  static struct page *ktmm_alloc_migrate_page(struct page *page, unsigned long private)
  {
@@ -260,29 +253,19 @@
    struct page *newpage;
    nodemask_t nodemask;
  
-   /*
-    * Build a nodemask with ONLY the target node.
-    * This is what __GFP_THISNODE effectively does.
-    */
    nodes_clear(nodemask);
    node_set(nid, nodemask);
  
-   /*
-    * Call pt_alloc_pages DIRECTLY, bypassing our hook!
-    * This is the key fix - our ktmm_alloc_pages was corrupting
-    * the nodemask and causing allocation failures.
-    */
    newpage = pt_alloc_pages(GFP_HIGHUSER_MOVABLE, 0, nid, &nodemask);
  
-   if (!newpage) {
+   if (!newpage)
      atomic64_inc(&migrate_alloc_fail);
-   }
  
    return newpage;
  }
  
  /**
-  * ktmm_free_migrate_page - EXACT copy of uts_free_migrate_page
+  * ktmm_free_migrate_page - Free page on migration failure
   */
  static void ktmm_free_migrate_page(struct page *page, unsigned long private)
  {
@@ -293,11 +276,6 @@
   * ktmm_migrate_folio_list - Migrate already-isolated FILE-BACKED folios
   *
   * ONLY migrates file-backed pages. Anonymous pages are SKIPPED.
-  *
-  * KEY DIFFERENCE from uts_migrate.c:
-  * - uts_migrate.c: caller provides extra ref, then calls put_page()
-  * - KTMM: folios already isolated, only have isolation ref
-  * So we do NOT call folio_put()!
   */
  static int ktmm_migrate_folio_list(struct list_head *folio_list, int target_nid,
             unsigned long *nr_succeeded_out)
@@ -316,9 +294,7 @@
  
    /*
     * Filter: ONLY migrate file-backed pages.
-    * Same filters as uts_migrate.c:
-    *   if (PageAnon(page) || PageCompound(page) || !page_mapping(page))
-    *       continue;
+    * Same filters as uts_migrate.c
     */
    list_for_each_entry_safe(folio, next, folio_list, lru) {
      /* Skip anonymous pages */
@@ -353,9 +329,6 @@
  
    atomic64_add(nr_to_migrate, &migrate_attempted);
  
-   /*
-    * Call migrate_pages() - kernel 6.1 has 7 args.
-    */
    ret = migrate_pages(&pagelist,
            ktmm_alloc_migrate_page,
            ktmm_free_migrate_page,
@@ -401,9 +374,6 @@
  
  /**
   * ktmm_alloc_pages - hooked __alloc_pages
-  *
-  * Steers normal allocations away from PMEM.
-  * Migration bypasses this via pt_alloc_pages directly.
   */
  static struct page *ktmm_alloc_pages(gfp_t gfp_mask, unsigned int order, int preferred_nid,
            nodemask_t *nodemask)
@@ -411,11 +381,9 @@
    nodemask_t nodemask_test;
    int nid;
  
-   /* Initialize nodemask to empty */
    nodes_clear(nodemask_test);
  
    if ((gfp_mask & __GFP_PMEM) != 0) {
-     /* Requesting PMEM: set only PMEM nodes */
      for_each_node_state(nid, N_MEMORY) {
        if (NODE_DATA(nid)->pm_node != 0)
          node_set(nid, nodemask_test);
@@ -423,7 +391,6 @@
      nodemask = &nodemask_test;
    }
    else if (pmem_node_id != -1) {
-     /* NOT requesting PMEM: set only DRAM nodes */
      for_each_node_state(nid, N_MEMORY) {
        if (NODE_DATA(nid)->pm_node == 0)
          node_set(nid, nodemask_test);
@@ -436,7 +403,7 @@
  
  
  /*****************************************************************************
-  * Node Scanning, Shrinking, and Promotion
+  * Helper Functions
   *****************************************************************************/
  
  static bool ktmm_cgroup_below_low(struct mem_cgroup *memcg)
@@ -485,68 +452,24 @@
  
  /*****************************************************************************
   * LIST SCANNING FUNCTIONS
+  *
+  * KEY CHANGE: Promotion happens DIRECTLY in scan_active_list() on PMEM node.
+  * No more broken promote list!
+  *
+  * DRAM (node 0, pm_node=0):
+  *   - scan_inactive_list: DEMOTE cold file pages to PMEM
+  *   - scan_active_list: deactivate unreferenced pages
+  *
+  * PMEM (node 1, pm_node!=0):
+  *   - scan_inactive_list: ACTIVATE referenced file pages
+  *   - scan_active_list: PROMOTE hot file pages to DRAM
   *****************************************************************************/
  
  /**
-  * scan_promote_list - PROMOTION: PMEM -> DRAM (file-backed only)
-  */
- static void scan_promote_list(unsigned long nr_to_scan,
-         struct lruvec *lruvec,
-         struct scan_control *sc,
-         enum lru_list lru,
-         struct pglist_data *pgdat)
- {
-   unsigned long nr_taken;
-   unsigned long nr_scanned;
-   unsigned long nr_migrated = 0;
-   LIST_HEAD(l_hold);
-   int file = is_file_lru(lru);
-   __maybe_unused int nid = pgdat->node_id;
-   int target_node = 0;  /* DRAM node */
- 
-   struct list_head *src = &lruvec->lists[lru];
- 
-   if (list_empty(src))
-     return;
- 
-   ktmm_lru_add_drain();
- 
-   spin_lock_irq(&lruvec->lru_lock);
- 
-   nr_taken = ktmm_isolate_lru_folios(nr_to_scan, lruvec, &l_hold,
-           &nr_scanned, sc, lru);
-   __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
- 
-   spin_unlock_irq(&lruvec->lru_lock);
- 
-   atomic64_add(nr_taken, &pages_scanned_promote);
- 
-   if (nr_taken == 0)
-     goto done;
- 
-   /* PROMOTION: PMEM -> DRAM (file-backed only) */
-   ktmm_migrate_folio_list(&l_hold, target_node, &nr_migrated);
- 
-   if (nr_migrated > 0) {
-     __mod_node_page_state(pgdat, NR_PROMOTED, nr_migrated);
-     atomic64_add(nr_migrated, &total_pages_promoted);
-     atomic64_add(nr_migrated, &pages_promote_to_dram);
-     printk(KERN_INFO "KTMM: Promoted %lu file pages PMEM->DRAM\n", nr_migrated);
-   }
- 
- done:
-   spin_lock_irq(&lruvec->lru_lock);
-   ktmm_move_folios_to_lru(lruvec, &l_hold);
-   __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
-   spin_unlock_irq(&lruvec->lru_lock);
- 
-   ktmm_cgroup_uncharge_list(&l_hold);
-   ktmm_free_unref_page_list(&l_hold);
- }
- 
- 
- /**
   * scan_active_list - scan active list
+  *
+  * On PMEM node: PROMOTE hot file-backed pages directly to DRAM!
+  * On DRAM node: just deactivate unreferenced pages (normal behavior)
   */
  static void scan_active_list(unsigned long nr_to_scan,
          struct lruvec *lruvec,
@@ -556,15 +479,17 @@
  {
    unsigned long nr_taken;
    unsigned long nr_scanned;
+   unsigned long nr_migrated = 0;
    unsigned long vm_flags;
    LIST_HEAD(l_hold);
    LIST_HEAD(l_active);
    LIST_HEAD(l_inactive);
-   LIST_HEAD(l_promote);
+   LIST_HEAD(l_promote);  /* Pages to promote to DRAM */
    __maybe_unused unsigned nr_deactivate, nr_activate, nr_promote;
    __maybe_unused unsigned nr_rotated = 0;
    int file = is_file_lru(lru);
    __maybe_unused int nid = pgdat->node_id;
+   int is_pmem_node = (pgdat->pm_node != 0);
  
    ktmm_lru_add_drain();
  
@@ -599,20 +524,22 @@
        }
      }
  
-     /* PMEM node: promote candidates (file-backed only) */
-     if (pgdat->pm_node != 0) {
+     /*
+      * PMEM NODE: Hot file-backed pages get PROMOTED to DRAM.
+      * We collect them in l_promote and migrate after the loop.
+      */
+     if (is_pmem_node) {
        if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
-         /* Only file-backed pages */
-         if (!folio_test_anon(folio)) {
-           folio_set_promote(folio);
+         /* Only file-backed pages can be promoted */
+         if (!folio_test_anon(folio) && !folio_test_large(folio) && folio_mapping(folio)) {
            list_add(&folio->lru, &l_promote);
-           atomic64_inc(&pages_active_to_promote);
+           atomic64_inc(&promote_candidates);
            continue;
          }
        }
      }
  
-     /* Referenced: rotate */
+     /* Referenced: keep active */
      if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup,
               &vm_flags) != 0) {
        if ((vm_flags & VM_EXEC) && folio_is_file_lru(folio)) {
@@ -622,17 +549,37 @@
        }
      }
  
+     /* Not referenced: deactivate */
      folio_clear_active(folio);
      folio_set_workingset(folio);
      list_add(&folio->lru, &l_inactive);
      atomic64_inc(&pages_active_to_inactive);
    }
  
+   /*
+    * PMEM NODE: Migrate hot pages to DRAM NOW!
+    * This is the key fix - we migrate directly instead of using broken promote list.
+    */
+   if (is_pmem_node && !list_empty(&l_promote)) {
+     int target_node = 0;  /* DRAM node */
+ 
+     ktmm_migrate_folio_list(&l_promote, target_node, &nr_migrated);
+ 
+     if (nr_migrated > 0) {
+       __mod_node_page_state(pgdat, NR_PROMOTED, nr_migrated);
+       atomic64_add(nr_migrated, &total_pages_promoted);
+       printk(KERN_INFO "KTMM: Promoted %lu file pages PMEM->DRAM\n", nr_migrated);
+     }
+   }
+ 
    spin_lock_irq(&lruvec->lru_lock);
  
    nr_activate = ktmm_move_folios_to_lru(lruvec, &l_active);
    nr_deactivate = ktmm_move_folios_to_lru(lruvec, &l_inactive);
-   nr_promote = ktmm_move_folios_to_lru(lruvec, &l_promote);
+ 
+   /* Put back any pages that failed promotion filter */
+   if (!list_empty(&l_promote))
+     ktmm_move_folios_to_lru(lruvec, &l_promote);
  
    list_splice(&l_inactive, &l_active);
  
@@ -646,7 +593,10 @@
  
  
  /**
-  * scan_inactive_list - DEMOTION: DRAM -> PMEM (file-backed only)
+  * scan_inactive_list - scan inactive list
+  *
+  * On DRAM node: DEMOTE cold file-backed pages to PMEM
+  * On PMEM node: ACTIVATE referenced file-backed pages
   */
  static unsigned long scan_inactive_list(unsigned long nr_to_scan,
            struct lruvec *lruvec,
@@ -656,6 +606,7 @@
  {
    LIST_HEAD(folio_list);
    LIST_HEAD(l_active);
+   LIST_HEAD(l_demote);  /* Pages to demote to PMEM */
    unsigned long nr_scanned;
    unsigned long nr_taken = 0;
    unsigned long nr_migrated = 0;
@@ -663,6 +614,8 @@
    unsigned long vm_flags;
    bool file = is_file_lru(lru);
    __maybe_unused int nid = pgdat->node_id;
+   int is_pmem_node = (pgdat->pm_node != 0);
+   int is_dram_node = (pgdat->pm_node == 0);
  
    ktmm_lru_add_drain();
  
@@ -680,29 +633,50 @@
  
    atomic64_add(nr_taken, &pages_scanned_inactive);
  
-   /* PMEM NODE: activate referenced file-backed pages */
-   if (pgdat->pm_node != 0) {
+   /*
+    * Process each folio based on node type
+    */
+   {
      struct folio *folio, *next;
-     
+ 
      list_for_each_entry_safe(folio, next, &folio_list, lru) {
-       if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
-         /* Only file-backed */
-         if (!folio_test_anon(folio)) {
-           list_del(&folio->lru);
-           folio_set_active(folio);
-           list_add(&folio->lru, &l_active);
-           nr_activate++;
-           atomic64_inc(&pages_inactive_to_active);
-         }
+       int is_referenced = ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags);
+       int is_file_backed = !folio_test_anon(folio) && !folio_test_large(folio) && folio_mapping(folio);
+ 
+       /*
+        * PMEM NODE: Activate referenced file-backed pages
+        * They'll get promoted from active list later.
+        */
+       if (is_pmem_node && is_referenced && is_file_backed) {
+         list_del(&folio->lru);
+         folio_set_active(folio);
+         list_add(&folio->lru, &l_active);
+         nr_activate++;
+         atomic64_inc(&pages_inactive_to_active);
+         continue;
        }
+ 
+       /*
+        * DRAM NODE: Cold (unreferenced) file-backed pages get demoted.
+        */
+       if (is_dram_node && pmem_node_id != -1 && !is_referenced && is_file_backed) {
+         list_del(&folio->lru);
+         list_add(&folio->lru, &l_demote);
+         atomic64_inc(&demote_candidates);
+         continue;
+       }
+ 
+       /* Leave other pages in folio_list for putback */
      }
    }
  
-   /* DRAM NODE: demote cold file-backed pages to PMEM */
-   if (pgdat->pm_node == 0 && pmem_node_id != -1) {
+   /*
+    * DRAM NODE: Demote cold file pages to PMEM
+    */
+   if (is_dram_node && !list_empty(&l_demote)) {
      int target_node = pmem_node_id;
  
-     ktmm_migrate_folio_list(&folio_list, target_node, &nr_migrated);
+     ktmm_migrate_folio_list(&l_demote, target_node, &nr_migrated);
  
      if (nr_migrated > 0) {
        __mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
@@ -716,6 +690,10 @@
    if (nr_activate > 0)
      ktmm_move_folios_to_lru(lruvec, &l_active);
  
+   /* Put back pages that weren't migrated */
+   if (!list_empty(&l_demote))
+     ktmm_move_folios_to_lru(lruvec, &l_demote);
+ 
    ktmm_move_folios_to_lru(lruvec, &folio_list);
    __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
  
@@ -723,6 +701,8 @@
  
    ktmm_cgroup_uncharge_list(&l_active);
    ktmm_free_unref_page_list(&l_active);
+   ktmm_cgroup_uncharge_list(&l_demote);
+   ktmm_free_unref_page_list(&l_demote);
    ktmm_cgroup_uncharge_list(&folio_list);
    ktmm_free_unref_page_list(&folio_list);
  
@@ -739,8 +719,7 @@
    if (is_active_lru(lru))
      scan_active_list(nr_to_scan, lruvec, sc, lru, pgdat);
  
-   if(is_promote_lru(lru))
-     scan_promote_list(nr_to_scan, lruvec, sc, lru, pgdat);
+   /* No more scan_promote_list - promotion happens in scan_active_list! */
  
    return scan_inactive_list(nr_to_scan, lruvec, sc, lru, pgdat);
  }
@@ -913,6 +892,10 @@
    printk(KERN_INFO "*** KTMM FINAL: Promoted: %llu, Demoted: %llu ***\n",
           (u64)atomic64_read(&total_pages_promoted),
           (u64)atomic64_read(&total_pages_demoted));
+ 
+   printk(KERN_INFO "*** KTMM Candidates: promote=%llu, demote=%llu ***\n",
+          (u64)atomic64_read(&promote_candidates),
+          (u64)atomic64_read(&demote_candidates));
  
    printk(KERN_INFO "*** KTMM Migration: attempted=%llu, success=%llu, alloc_fail=%llu ***\n",
           (u64)atomic64_read(&migrate_attempted),
