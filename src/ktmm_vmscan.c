@@ -6,16 +6,13 @@
  *  Migration logic adapted from uts_migrate.c (kernel 5.14) for kernel 6.1
  *  ONLY migrates file-backed pages (skips anonymous pages)
  *
- *  KEY FIX v7: SYMMETRIC promotion/demotion for 1:1 ratio
+ *  KEY FIX v8: RATE-LIMITED demotion for 1:1 ratio
  *
- *  DRAM (cold -> demote):
- *    - Unreferenced file page on inactive list -> DEMOTE to PMEM
+ *  Problem: Natural memory flow is DRAM->PMEM (demote), with only hot pages
+ *  flowing back (promote). This creates asymmetric rates.
  *
- *  PMEM (hot -> promote):
- *    - Referenced file page on inactive list -> PROMOTE to DRAM (KEY FIX!)
- *    - Referenced file page on active list -> PROMOTE to DRAM
- *
- *  Now both directions require only ONE access/non-access to trigger migration!
+ *  Solution: Track promotion/demotion rates and throttle demotions to match
+ *  the promotion rate. This ensures roughly 1:1 ratio.
  */
 
  #include <linux/atomic.h>
@@ -65,11 +62,31 @@
  
  
  /*****************************************************************************
-  * Promotion/Demotion Page Counters
+  * RATE LIMITING FOR 1:1 RATIO
+  *
+  * We track promotion and demotion counts. Demotions are only allowed if
+  * the demotion count is not too far ahead of the promotion count.
+  *
+  * demotion_budget = promotions - demotions + INITIAL_BUDGET
+  * If budget <= 0, skip demotion this cycle
   *****************************************************************************/
+ 
+ #define RATE_LIMIT_SLACK 1000  /* Allow demotions to be this many ahead */
  
  static atomic64_t total_pages_promoted = ATOMIC64_INIT(0);
  static atomic64_t total_pages_demoted = ATOMIC64_INIT(0);
+ static atomic64_t demotions_skipped = ATOMIC64_INIT(0);
+ 
+ /* Returns how many pages we're allowed to demote this cycle */
+ static inline long get_demotion_budget(void)
+ {
+   long promoted = atomic64_read(&total_pages_promoted);
+   long demoted = atomic64_read(&total_pages_demoted);
+   
+   /* Budget = promotions - demotions + slack */
+   return promoted - demoted + RATE_LIMIT_SLACK;
+ }
+ 
  
  /*****************************************************************************
   * Page Flow Debug Counters
@@ -97,6 +114,7 @@
  {
    u64 promoted = atomic64_read(&total_pages_promoted);
    u64 demoted = atomic64_read(&total_pages_demoted);
+   u64 skipped = atomic64_read(&demotions_skipped);
  
    u64 scanned_inactive = atomic64_read(&pages_scanned_inactive);
    u64 scanned_active = atomic64_read(&pages_scanned_active);
@@ -112,15 +130,21 @@
    u64 promo_active = atomic64_read(&promote_from_active);
    u64 demo_inactive = atomic64_read(&demote_from_inactive);
  
-   printk(KERN_INFO "*** KTMM PAGE STATS: Total Promoted: %llu, Total Demoted: %llu ***\n",
-          promoted, demoted);
+   long budget = get_demotion_budget();
+ 
+   printk(KERN_INFO "*** KTMM PAGE STATS: Promoted: %llu, Demoted: %llu (ratio: %s) ***\n",
+          promoted, demoted,
+          (demoted > 0) ? ((promoted * 100 / demoted > 80) ? "GOOD" : "adjusting") : "N/A");
+ 
+   printk(KERN_INFO "*** KTMM RATE LIMIT: budget=%ld, skipped=%llu ***\n",
+          budget, skipped);
  
    printk(KERN_INFO "*** KTMM PAGE FLOW DEBUG ***\n");
    printk(KERN_INFO "  Scanned: inactive=%llu, active=%llu\n",
           scanned_inactive, scanned_active);
-   printk(KERN_INFO "  Promote from: inactive=%llu, active=%llu (total candidates=%llu)\n",
+   printk(KERN_INFO "  Promote from: inactive=%llu, active=%llu (total=%llu)\n",
           promo_inactive, promo_active, promo_inactive + promo_active);
-   printk(KERN_INFO "  Demote from: inactive=%llu\n", demo_inactive);
+   printk(KERN_INFO "  Demote candidates: %llu\n", demo_inactive);
  
    printk(KERN_INFO "*** KTMM MIGRATION DEBUG ***\n");
    printk(KERN_INFO "  Filtered: anon=%llu, compound=%llu, no_mapping=%llu\n",
@@ -437,10 +461,11 @@
  
  
  /*****************************************************************************
-  * LIST SCANNING FUNCTIONS - SYMMETRIC LOGIC FOR 1:1 RATIO
+  * LIST SCANNING FUNCTIONS - WITH RATE LIMITING
   *
   * DRAM (node 0, pm_node=0):
   *   - scan_inactive_list: DEMOTE unreferenced file pages to PMEM
+  *     BUT: Only if demotion budget allows (rate limiting!)
   *   - scan_active_list: deactivate unreferenced pages (normal)
   *
   * PMEM (node 1, pm_node!=0):
@@ -577,6 +602,19 @@
    __maybe_unused int nid = pgdat->node_id;
    int is_pmem_node = (pgdat->pm_node != 0);
    int is_dram_node = (pgdat->pm_node == 0);
+   
+   /* Rate limiting: check budget before scanning DRAM */
+   long budget = 0;
+   int demote_count = 0;
+   
+   if (is_dram_node && pmem_node_id != -1) {
+     budget = get_demotion_budget();
+     if (budget <= 0) {
+       /* No budget - skip this scan cycle */
+       atomic64_inc(&demotions_skipped);
+       return 0;
+     }
+   }
  
    ktmm_lru_add_drain();
  
@@ -602,8 +640,7 @@
        int is_file = is_file_backed_folio(folio);
  
        /*
-        * PMEM NODE: PROMOTE referenced file-backed pages to DRAM!
-        * KEY FIX: Previously we just activated, now we promote directly!
+        * PMEM NODE: PROMOTE referenced file-backed pages to DRAM
         */
        if (is_pmem_node && is_referenced && is_file) {
          list_del(&folio->lru);
@@ -612,11 +649,18 @@
          continue;
        }
  
-       /* DRAM NODE: DEMOTE unreferenced file-backed pages to PMEM */
+       /*
+        * DRAM NODE: DEMOTE unreferenced file-backed pages to PMEM
+        * BUT: Respect rate limit - only demote up to budget
+        */
        if (is_dram_node && pmem_node_id != -1 && !is_referenced && is_file) {
-         list_del(&folio->lru);
-         list_add(&folio->lru, &l_demote);
-         atomic64_inc(&demote_from_inactive);
+         if (demote_count < budget) {
+           list_del(&folio->lru);
+           list_add(&folio->lru, &l_demote);
+           atomic64_inc(&demote_from_inactive);
+           demote_count++;
+         }
+         /* If over budget, leave page in folio_list for putback */
          continue;
        }
      }
@@ -851,9 +895,8 @@
           (u64)atomic64_read(&total_pages_promoted),
           (u64)atomic64_read(&total_pages_demoted));
  
-   printk(KERN_INFO "*** KTMM Promote from: inactive=%llu, active=%llu ***\n",
-          (u64)atomic64_read(&promote_from_inactive),
-          (u64)atomic64_read(&promote_from_active));
+   printk(KERN_INFO "*** KTMM Rate limit skipped: %llu ***\n",
+          (u64)atomic64_read(&demotions_skipped));
  
    printk(KERN_INFO "*** KTMM Migration: attempted=%llu, success=%llu, alloc_fail=%llu ***\n",
           (u64)atomic64_read(&migrate_attempted),
