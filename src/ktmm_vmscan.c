@@ -107,6 +107,12 @@ static void init_promote_list(int nid)
  *
  * Called during module cleanup to ensure no pages are left stranded.
  */
+static void (*pt_folio_putback_lru)(struct folio *folio);
+
+static void ktmm_folio_putback_lru(struct folio *folio)
+{
+  pt_folio_putback_lru(folio);
+}
 static void drain_promote_list(int nid, struct pglist_data *pgdat)
 {
   struct ktmm_promote_list *pli = &promote_lists[nid];
@@ -262,7 +268,6 @@ static unsigned long (*pt_isolate_lru_folios)(unsigned long nr_to_scan, struct l
 
 static unsigned int (*pt_move_folios_to_lru)(struct lruvec *lruvec, struct list_head *list);
 
-static void (*pt_folio_putback_lru)(struct folio *folio);
 
 
 static int (*pt_folio_referenced)(struct folio *folio, int is_locked,
@@ -279,10 +284,7 @@ static struct mem_cgroup *ktmm_mem_cgroup_iter(struct mem_cgroup *root,
 {
   return pt_mem_cgroup_iter(root, prev, reclaim);
 }
-static void ktmm_folio_putback_lru(struct folio *folio)
-{
-  pt_folio_putback_lru(folio);
-}
+
 
 static bool ktmm_zone_watermark_ok_safe(struct zone *z,
           unsigned int order,
