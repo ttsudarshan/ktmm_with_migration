@@ -91,10 +91,7 @@ struct ktmm_promote_list {
   spinlock_t       lock;
   unsigned long    count;
 };
-static void ktmm_folio_putback_lru(struct folio *folio)
-{
-  pt_folio_putback_lru(folio);
-}
+
 
 static struct ktmm_promote_list promote_lists[MAX_NUMNODES];
 
@@ -267,6 +264,7 @@ static unsigned int (*pt_move_folios_to_lru)(struct lruvec *lruvec, struct list_
 
 static void (*pt_folio_putback_lru)(struct folio *folio);
 
+
 static int (*pt_folio_referenced)(struct folio *folio, int is_locked,
         struct mem_cgroup *memcg, unsigned long *vm_flags);
 
@@ -280,6 +278,10 @@ static struct mem_cgroup *ktmm_mem_cgroup_iter(struct mem_cgroup *root,
         struct mem_cgroup_reclaim_cookie *reclaim)
 {
   return pt_mem_cgroup_iter(root, prev, reclaim);
+}
+static void ktmm_folio_putback_lru(struct folio *folio)
+{
+  pt_folio_putback_lru(folio);
 }
 
 static bool ktmm_zone_watermark_ok_safe(struct zone *z,
