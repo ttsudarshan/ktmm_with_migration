@@ -154,6 +154,14 @@ static int (*pt_migrate_pages)(struct list_head *l, new_page_t new,
 		enum migrate_mode mode, int reason,
 		unsigned int *ret_succeeded);
 
+/*
+ * buffer_heads_over_limit is an unexported kernel data symbol (a variable,
+ * so the kprobe-based symbol_lookup() can't resolve it). We bootstrap
+ * kallsyms_lookup_name() at init to get its address and read the live value,
+ * preserving the original active-list behaviour exactly.
+ */
+static int *pt_buffer_heads_over_limit;
+
 static struct task_struct *tmemd_list[MAX_NUMNODES];
 wait_queue_head_t tmemd_wait[MAX_NUMNODES];
 
@@ -789,7 +797,7 @@ static void scan_active_list(unsigned long nr_to_scan,
       continue;
     }
 
-    if (unlikely(buffer_heads_over_limit)) {
+    if (unlikely(pt_buffer_heads_over_limit && *pt_buffer_heads_over_limit)) {
       if (ktmm_folio_needs_release(folio) &&
           folio_trylock(folio)) {
         filemap_release_folio(folio, 0);
@@ -1160,6 +1168,17 @@ int tmemd_start_available(void)
   if (!pt_migrate_pages) {
     pr_err("KTMM: could not resolve migrate_pages symbol\n");
     return -ENOENT;
+  }
+
+  /* Resolve the unexported buffer_heads_over_limit data symbol. */
+  {
+    unsigned long (*kln)(const char *);
+
+    kln = (void *)symbol_lookup("kallsyms_lookup_name");
+    if (kln)
+      pt_buffer_heads_over_limit = (int *)kln("buffer_heads_over_limit");
+    if (!pt_buffer_heads_over_limit)
+      pr_warn("KTMM: buffer_heads_over_limit unresolved; treating as 0\n");
   }
 
   for (i = 0; i < MAX_NUMNODES; i++) {
