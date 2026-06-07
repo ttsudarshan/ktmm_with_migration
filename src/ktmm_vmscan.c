@@ -71,6 +71,84 @@
 
 int pmem_node = -1;
 
+/* =====================================================================
+ * PATCH-FREE SHIMS
+ * These replace kernel-side additions the old patched tree provided
+ * (pm_node field, pmem_node_id global, set_* helpers, __GFP_PMEM,
+ *  NR_PROMOTED/NR_DEMOTED, exported migrate_pages). Nothing here needs
+ * a kernel rebuild.
+ * ===================================================================== */
+
+/* Logical PMEM node id, chosen by the module (no kernel pm_node field). */
+static int pmem_node_id = -1;
+static inline void set_pmem_node_id(int nid) { pmem_node_id = nid; }
+static inline void set_pmem_node(int nid)    { (void)nid; }  /* was: pgdat->pm_node */
+static inline void set_ktmm_scan(void)       { }            /* was: kernel reclaim toggle */
+
+/* Replaces "pgdat->pm_node != 0": is this the logical PMEM node? */
+static inline bool ktmm_is_pmem_node(struct pglist_data *pgdat)
+{
+	return pgdat->node_id == pmem_node_id;
+}
+
+/* ---------------------------------------------------------------------
+ * struct scan_control is PRIVATE to mm/vmscan.c -- there is no public
+ * header for it. The hooked isolate_lru_folios() reads fields out of the
+ * pointer we hand it, so this MUST match the kernel's binary layout for
+ * THIS exact kernel. VERIFY against your tree and replace if different:
+ *
+ *   sed -n '/^struct scan_control {/,/^};/p' \
+ *       /home/tiwari/linux-6.1.133/mm/vmscan.c
+ *
+ * A mismatch = silent memory corruption, so do not skip this check.
+ * (Layout below is mainline 6.1.)
+ * --------------------------------------------------------------------- */
+struct scan_control {
+	unsigned long nr_to_reclaim;
+	nodemask_t	*nodemask;
+	struct mem_cgroup *target_mem_cgroup;
+	unsigned long	anon_cost;
+	unsigned long	file_cost;
+#define DEACTIVATE_ANON 1
+#define DEACTIVATE_FILE 2
+	unsigned int may_deactivate:2;
+	unsigned int force_deactivate:1;
+	unsigned int skipped_deactivate:1;
+	unsigned int may_writepage:1;
+	unsigned int may_unmap:1;
+	unsigned int may_swap:1;
+	unsigned int proactive:1;
+	unsigned int memcg_low_reclaim:1;
+	unsigned int memcg_low_skipped:1;
+	unsigned int hibernation_mode:1;
+	unsigned int compaction_ready:1;
+	unsigned int cache_trim_mode:1;
+	unsigned int file_is_tiny:1;
+	unsigned int no_demotion:1;
+	s8 order;
+	s8 priority;
+	s8 reclaim_idx;
+	gfp_t gfp_mask;
+	unsigned long nr_scanned;
+	unsigned long nr_reclaimed;
+	struct {
+		unsigned int dirty;
+		unsigned int unqueued_dirty;
+		unsigned int congested;
+		unsigned int writeback;
+		unsigned int immediate;
+		unsigned int file_taken;
+		unsigned int taken;
+	} nr;
+	struct reclaim_state reclaim_state;
+};
+
+/* migrate_pages() is not exported to modules; resolve it like the hooks. */
+static int (*pt_migrate_pages)(struct list_head *l, new_page_t new,
+		free_page_t free, unsigned long private,
+		enum migrate_mode mode, int reason,
+		unsigned int *ret_succeeded);
+
 static struct task_struct *tmemd_list[MAX_NUMNODES];
 wait_queue_head_t tmemd_wait[MAX_NUMNODES];
 
@@ -209,7 +287,7 @@ static void page_stats_timer_callback(struct timer_list *t)
   int nid;
 
   for_each_online_node(nid) {
-    if (NODE_DATA(nid)->pm_node != 0)
+    if (nid == pmem_node_id)
       plist_depth += promote_lists[nid].count;
   }
 
@@ -437,7 +515,7 @@ static int ktmm_migrate_folio_list(struct list_head *folio_list, int target_nid,
 
   atomic64_add(nr_to_migrate, &migrate_attempted);
 
-  ret = migrate_pages(&pagelist,
+  ret = pt_migrate_pages(&pagelist,
           ktmm_alloc_migrate_page,
           ktmm_free_migrate_page,
           (unsigned long)target_nid,
@@ -468,20 +546,12 @@ static int ktmm_migrate_folio_list(struct list_head *folio_list, int target_nid,
  * ALLOC & SWAP
  *****************************************************************************/
 
-struct page* alloc_pmem_page(struct page *page, unsigned long data)
-{
-  gfp_t gfp_mask = GFP_USER | __GFP_PMEM;
-  return alloc_page(gfp_mask);
-}
-
-struct page* alloc_normal_page(struct page *page, unsigned long data)
-{
-  gfp_t gfp_mask = GFP_USER;
-  return alloc_page(gfp_mask);
-}
-
 /**
  * ktmm_alloc_pages - hooked __alloc_pages
+ *
+ * Keeps normal page allocations off the logical PMEM node (preserves the
+ * old __GFP_PMEM-era behaviour without the custom GFP flag). Migration
+ * allocations bypass this hook via ktmm_alloc_migrate_page().
  */
 static struct page *ktmm_alloc_pages(gfp_t gfp_mask, unsigned int order, int preferred_nid,
           nodemask_t *nodemask)
@@ -489,18 +559,10 @@ static struct page *ktmm_alloc_pages(gfp_t gfp_mask, unsigned int order, int pre
   nodemask_t nodemask_test;
   int nid;
 
-  nodes_clear(nodemask_test);
-
-  if ((gfp_mask & __GFP_PMEM) != 0) {
+  if (pmem_node_id != -1) {
+    nodes_clear(nodemask_test);
     for_each_node_state(nid, N_MEMORY) {
-      if (NODE_DATA(nid)->pm_node != 0)
-        node_set(nid, nodemask_test);
-    }
-    nodemask = &nodemask_test;
-  }
-  else if (pmem_node_id != -1) {
-    for_each_node_state(nid, N_MEMORY) {
-      if (NODE_DATA(nid)->pm_node == 0)
+      if (nid != pmem_node_id)
         node_set(nid, nodemask_test);
     }
     nodemask = &nodemask_test;
@@ -604,7 +666,7 @@ static unsigned long scan_promote_list(unsigned long nr_to_scan,
   unsigned long nr_migrated = 0;
   int target_node = 0;  /* DRAM */
 
-  if (pgdat->pm_node == 0)
+  if (!ktmm_is_pmem_node(pgdat))
     return 0;
 
   /*
@@ -639,7 +701,6 @@ static unsigned long scan_promote_list(unsigned long nr_to_scan,
   ktmm_migrate_folio_list(&l_migrate, target_node, &nr_migrated);
 
   if (nr_migrated > 0) {
-    __mod_node_page_state(pgdat, NR_PROMOTED, nr_migrated);
     atomic64_add(nr_migrated, &total_pages_promoted);
     atomic64_add(nr_migrated, &pages_promote_to_dram);
     printk(KERN_INFO "KTMM: [Stage 3] Promoted %lu file pages promote->DRAM\n",
@@ -696,7 +757,7 @@ static void scan_active_list(unsigned long nr_to_scan,
   unsigned long nr_enqueued = 0;  /* pages added to promote list */
   int file = is_file_lru(lru);
   __maybe_unused int nid = pgdat->node_id;
-  int is_pmem_node = (pgdat->pm_node != 0);
+  int is_pmem_node = ktmm_is_pmem_node(pgdat);
 
   ktmm_lru_add_drain();
 
@@ -832,8 +893,8 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
   unsigned long vm_flags;
   bool file = is_file_lru(lru);
   __maybe_unused int nid = pgdat->node_id;
-  int is_pmem_node = (pgdat->pm_node != 0);
-  int is_dram_node = (pgdat->pm_node == 0);
+  int is_pmem_node = ktmm_is_pmem_node(pgdat);
+  int is_dram_node = !ktmm_is_pmem_node(pgdat);
 
   ktmm_lru_add_drain();
 
@@ -898,7 +959,6 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
     ktmm_migrate_folio_list(&l_demote, target_node, &nr_migrated);
 
     if (nr_migrated > 0) {
-      __mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
       atomic64_add(nr_migrated, &total_pages_demoted);
       printk(KERN_INFO "KTMM: Demoted %lu file pages DRAM->PMEM\n", nr_migrated);
     }
@@ -964,7 +1024,7 @@ static void scan_node(pg_data_t *pgdat,
    *   - Stage 2 below refills the list for t+1
    *   - Stage 1 below feeds the active list for t+1's Stage 2
    */
-  if (pgdat->pm_node != 0) {
+  if (ktmm_is_pmem_node(pgdat)) {
     scan_promote_list(1024, pgdat);
   }
 
@@ -1037,7 +1097,6 @@ static int tmemd(void *p)
     .may_unmap = 1,
     .may_swap = 1,
     .reclaim_idx = MAX_NR_ZONES - 1,
-    .only_promote = 1,
   };
 
   if(!cpumask_empty(cpumask))
@@ -1091,6 +1150,12 @@ int tmemd_start_available(void)
   int ret;
 
   set_ktmm_scan();
+
+  pt_migrate_pages = (void *)symbol_lookup("migrate_pages");
+  if (!pt_migrate_pages) {
+    pr_err("KTMM: could not resolve migrate_pages symbol\n");
+    return -ENOENT;
+  }
 
   for (i = 0; i < MAX_NUMNODES; i++) {
     init_waitqueue_head(&tmemd_wait[i]);
@@ -1150,7 +1215,7 @@ void tmemd_stop_all(void)
   /* Drain any remaining pages from promote lists before unhooking */
   for_each_online_node(nid)
   {
-    if (NODE_DATA(nid)->pm_node != 0)
+    if (nid == pmem_node_id)
       drain_promote_list(nid, NODE_DATA(nid));
   }
 
