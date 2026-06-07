@@ -125,6 +125,11 @@ struct scan_control {
 	unsigned int cache_trim_mode:1;
 	unsigned int file_is_tiny:1;
 	unsigned int no_demotion:1;
+#ifdef CONFIG_LRU_GEN
+	/* help kswapd make better choices among multiple memcgs */
+	unsigned int memcgs_need_aging:1;
+	unsigned long last_reclaimed;
+#endif
 	s8 order;
 	s8 priority;
 	s8 reclaim_idx;
