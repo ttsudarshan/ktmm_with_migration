@@ -340,7 +340,7 @@ static void page_stats_timer_callback(struct timer_list *t)
   //        mig_attempted, mig_success, alloc_fail);
   // printk(KERN_INFO "*** END DEBUG ***\n");
 
-   mod_timer(&page_stats_timer, jiffies + 5 * HZ);
+  mod_timer(&page_stats_timer, jiffies + 5 * HZ);
 }
 
 
@@ -730,8 +730,8 @@ static unsigned long scan_promote_list(unsigned long nr_to_scan,
   if (nr_migrated > 0) {
     atomic64_add(nr_migrated, &total_pages_promoted);
     atomic64_add(nr_migrated, &pages_promote_to_dram);
-    printk(KERN_INFO "KTMM: [Stage 3] Promoted %lu file pages promote->DRAM\n",
-           nr_migrated);
+    // printk(KERN_INFO "KTMM: [Stage 3] Promoted %lu file pages promote->DRAM\n",
+    //        nr_migrated);
   }
 
   /*
