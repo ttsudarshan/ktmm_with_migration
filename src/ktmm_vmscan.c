@@ -80,7 +80,21 @@ int pmem_node = -1;
  * ===================================================================== */
 
 /* Logical PMEM node id, chosen by the module (no kernel pm_node field). */
+#include <linux/moduleparam.h>
+
 static int pmem_node_id = -1;
+
+/*
+ * Tier selection. Defaults target THIS machine's layout (node 0 = local DRAM,
+ * node 2 = CPU-less CXL). Override without recompiling, e.g.:
+ *     sudo insmod build/ktmm.ko pmem_nid=2 dram_nid=0
+ */
+static int pmem_nid = 2;   /* slow tier: CXL / PMEM */
+static int dram_nid = 0;   /* fast tier: local DRAM */
+module_param(pmem_nid, int, 0444);
+MODULE_PARM_DESC(pmem_nid, "NUMA node id used as the slow (CXL/PMEM) tier");
+module_param(dram_nid, int, 0444);
+MODULE_PARM_DESC(dram_nid, "NUMA node id used as the fast (DRAM) tier");
 static inline void set_pmem_node_id(int nid) { pmem_node_id = nid; }
 static inline void set_pmem_node(int nid)    { (void)nid; }  /* was: pgdat->pm_node */
 static inline void set_ktmm_scan(void)       { }            /* was: kernel reclaim toggle */
@@ -677,7 +691,7 @@ static unsigned long scan_promote_list(unsigned long nr_to_scan,
   struct folio *folio, *next;
   unsigned long nr_taken = 0;
   unsigned long nr_migrated = 0;
-  int target_node = 0;  /* DRAM */
+  int target_node = dram_nid;  /* promote to the fast DRAM tier */
 
   if (!ktmm_is_pmem_node(pgdat))
     return 0;
@@ -1191,15 +1205,19 @@ int tmemd_start_available(void)
   timer_setup(&page_stats_timer, page_stats_timer_callback, 0);
   mod_timer(&page_stats_timer, jiffies + 5 * HZ);
   
+  /* Designate the slow tier up front so no daemon races an unset value. */
+  set_pmem_node_id(pmem_nid);
+  set_pmem_node(pmem_nid);
+  pr_info("KTMM: fast tier = node %d (DRAM), slow tier = node %d (CXL/PMEM)\n",
+          dram_nid, pmem_nid);
+
   for_each_online_node(nid)
   {
     pg_data_t *pgdat = NODE_DATA(nid);
 
-    if (nid == 1) {
-      pr_info("Emulating pmem node");
-      set_pmem_node_id(nid);
-      set_pmem_node(nid);
-    }
+    /* Only the two configured tiers participate; ignore all other nodes. */
+    if (nid != dram_nid && nid != pmem_nid)
+      continue;
 
     tmemd_list[nid] = kthread_run(&tmemd, pgdat, "tmemd");
   }
@@ -1233,7 +1251,8 @@ void tmemd_stop_all(void)
 
   for_each_online_node(nid)
   {
-    kthread_stop(tmemd_list[nid]);
+    if (!IS_ERR_OR_NULL(tmemd_list[nid]))
+      kthread_stop(tmemd_list[nid]);
   }
 
   /* Drain any remaining pages from promote lists before unhooking */
