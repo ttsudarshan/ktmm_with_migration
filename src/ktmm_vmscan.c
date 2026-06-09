@@ -19,11 +19,18 @@
  *  isolated while on the promote list; NR_ISOLATED is adjusted when they
  *  finally migrate or get put back.
  *
- *  DRAM (node 0, pm_node=0):
- *    - scan_inactive_list: DEMOTE cold file pages to PMEM
+ *  Tiers are chosen by module params, NOT by node id 0/1. On this machine:
+ *      dram_nid = 0  (fast tier, local DRAM)
+ *      pmem_nid = 2  (slow tier, CPU-less CXL node)
+ *  Node 1 (the second DRAM socket) is deliberately NOT a participant: no
+ *  daemon is spawned for it, so it is never scanned, never a demote source,
+ *  and never a migration target.
+ *
+ *  FAST/DRAM node (node_id == dram_nid):
+ *    - scan_inactive_list: DEMOTE cold file pages to the slow tier
  *    - scan_active_list:   deactivate unreferenced pages (normal)
  *
- *  PMEM (node 1, pm_node!=0):
+ *  SLOW/PMEM node (node_id == pmem_nid, i.e. ktmm_is_pmem_node()==true):
  *    - scan_promote_list:  MIGRATE promote list pages to DRAM   (stage 3)
  *    - scan_active_list:   ENQUEUE hot file pages to promote    (stage 2)
  *    - scan_inactive_list: ACTIVATE referenced file pages       (stage 1)
@@ -99,7 +106,8 @@ static inline void set_pmem_node_id(int nid) { pmem_node_id = nid; }
 static inline void set_pmem_node(int nid)    { (void)nid; }  /* was: pgdat->pm_node */
 static inline void set_ktmm_scan(void)       { }            /* was: kernel reclaim toggle */
 
-/* Replaces "pgdat->pm_node != 0": is this the logical PMEM node? */
+/* Is this pgdat the logical slow (PMEM/CXL) tier? Compares against the
+ * module-selected pmem_node_id (set from the pmem_nid param at init). */
 static inline bool ktmm_is_pmem_node(struct pglist_data *pgdat)
 {
 	return pgdat->node_id == pmem_node_id;
@@ -241,8 +249,8 @@ static void drain_promote_list(int nid, struct pglist_data *pgdat)
   if (nr_drained > 0) {
     /* These pages were counted as isolated; fix the count */
     __mod_node_page_state(pgdat, NR_ISOLATED_FILE, -(long)nr_drained);
-    printk(KERN_INFO "KTMM: Drained %lu pages from promote list on node %d\n",
-           nr_drained, nid);
+    // printk(KERN_INFO "KTMM: Drained %lu pages from promote list on node %d\n",
+           // nr_drained, nid);
   }
 }
 
@@ -318,27 +326,27 @@ static void page_stats_timer_callback(struct timer_list *t)
       plist_depth += promote_lists[nid].count;
   }
 
-  printk(KERN_INFO "*** KTMM PAGE STATS: Total Promoted: %llu, Total Demoted: %llu ***\n",
-         promoted, demoted);
+  // printk(KERN_INFO "*** KTMM PAGE STATS: Total Promoted: %llu, Total Demoted: %llu ***\n",
+         // promoted, demoted);
 
-  printk(KERN_INFO "*** KTMM 3-STAGE PIPELINE ***\n");
-  printk(KERN_INFO "  Stage 1 (inactive->active):  %llu\n", s1_inactive_to_active);
-  printk(KERN_INFO "  Stage 2 (active->promote):   %llu\n", s2_active_to_promote);
-  printk(KERN_INFO "  Stage 3 (promote->DRAM):     %llu\n", s3_promote_to_dram);
-  printk(KERN_INFO "  Promote list depth:          %lu\n", plist_depth);
+  // printk(KERN_INFO "*** KTMM 3-STAGE PIPELINE ***\n");
+  // printk(KERN_INFO "  Stage 1 (inactive->active):  %llu\n", s1_inactive_to_active);
+  // printk(KERN_INFO "  Stage 2 (active->promote):   %llu\n", s2_active_to_promote);
+  // printk(KERN_INFO "  Stage 3 (promote->DRAM):     %llu\n", s3_promote_to_dram);
+  // printk(KERN_INFO "  Promote list depth:          %lu\n", plist_depth);
 
-  printk(KERN_INFO "*** KTMM PAGE FLOW DEBUG ***\n");
-  printk(KERN_INFO "  Scanned: inactive=%llu, active=%llu, promote=%llu\n",
-         scanned_inactive, scanned_active, scanned_promote);
-  printk(KERN_INFO "  Deactivated (active->inactive): %llu\n", active_to_inactive);
-  printk(KERN_INFO "  Demote candidates: %llu\n", demo_cand);
+  // printk(KERN_INFO "*** KTMM PAGE FLOW DEBUG ***\n");
+  // printk(KERN_INFO "  Scanned: inactive=%llu, active=%llu, promote=%llu\n",
+         // scanned_inactive, scanned_active, scanned_promote);
+  // printk(KERN_INFO "  Deactivated (active->inactive): %llu\n", active_to_inactive);
+  // printk(KERN_INFO "  Demote candidates: %llu\n", demo_cand);
 
-  printk(KERN_INFO "*** KTMM MIGRATION DEBUG ***\n");
-  printk(KERN_INFO "  Filtered: anon=%llu, compound=%llu, no_mapping=%llu\n",
-         filter_anon, filter_compound, filter_no_mapping);
-  printk(KERN_INFO "  Migrate: attempted=%llu, success=%llu, alloc_fail=%llu\n",
-         mig_attempted, mig_success, alloc_fail);
-  printk(KERN_INFO "*** END DEBUG ***\n");
+  // printk(KERN_INFO "*** KTMM MIGRATION DEBUG ***\n");
+  // printk(KERN_INFO "  Filtered: anon=%llu, compound=%llu, no_mapping=%llu\n",
+         // filter_anon, filter_compound, filter_no_mapping);
+  // printk(KERN_INFO "  Migrate: attempted=%llu, success=%llu, alloc_fail=%llu\n",
+         // mig_attempted, mig_success, alloc_fail);
+  // printk(KERN_INFO "*** END DEBUG ***\n");
 
   mod_timer(&page_stats_timer, jiffies + 5 * HZ);
 }
@@ -462,6 +470,8 @@ static int ktmm_folio_referenced(struct folio *folio, int is_locked,
  */
 static struct page *ktmm_alloc_migrate_page(struct page *page, unsigned long private)
 {
+  /* private carries the target nid (passed as unsigned long by migrate_pages).
+   * Safe for the small node ids we use (0,2); revisit if node ids exceed INT_MAX. */
   int nid = (int)private;
   struct page *newpage;
   nodemask_t nodemask;
@@ -657,11 +667,11 @@ static inline bool is_file_backed_folio(struct folio *folio)
 /*****************************************************************************
  * LIST SCANNING FUNCTIONS — 3-STAGE PIPELINE
  *
- * DRAM (node 0, pm_node=0):
- *   - scan_inactive_list: DEMOTE cold file pages to PMEM
+ * FAST/DRAM node (node_id == dram_nid):
+ *   - scan_inactive_list: DEMOTE cold file pages to the slow tier
  *   - scan_active_list:   deactivate unreferenced pages
  *
- * PMEM (node 1, pm_node!=0):
+ * SLOW/PMEM node (node_id == pmem_nid):
  *   - scan_promote_list:  Stage 3 — migrate promote list -> DRAM
  *   - scan_active_list:   Stage 2 — enqueue hot file pages -> promote list
  *   - scan_inactive_list: Stage 1 — activate referenced file pages
@@ -730,8 +740,8 @@ static unsigned long scan_promote_list(unsigned long nr_to_scan,
   if (nr_migrated > 0) {
     atomic64_add(nr_migrated, &total_pages_promoted);
     atomic64_add(nr_migrated, &pages_promote_to_dram);
-    printk(KERN_INFO "KTMM: [Stage 3] Promoted %lu file pages promote->DRAM\n",
-           nr_migrated);
+    // printk(KERN_INFO "KTMM: [Stage 3] Promoted %lu file pages promote->DRAM\n",
+           // nr_migrated);
   }
 
   /*
@@ -775,6 +785,7 @@ static void scan_active_list(unsigned long nr_to_scan,
   unsigned long nr_taken;
   unsigned long nr_scanned;
   unsigned long vm_flags;
+  int referenced;            /* cached folio_referenced() result (see loop) */
   LIST_HEAD(l_hold);
   LIST_HEAD(l_active);
   LIST_HEAD(l_inactive);
@@ -820,32 +831,36 @@ static void scan_active_list(unsigned long nr_to_scan,
     }
 
     /*
-     * PMEM NODE — Stage 2: referenced file pages go to promote list.
+     * Evaluate references ONCE. folio_referenced() clears the PTE accessed
+     * bits as a side effect, so calling it twice on the same folio corrupts
+     * the signal -- the second call sees the bits the first already cleared
+     * and reports the page as cold. Capture the result and reuse it for every
+     * decision below. (This was the bug: the old code called it here AND again
+     * in the "keep active" branch.)
+     */
+    referenced = ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup,
+                                       &vm_flags);
+
+    /*
+     * SLOW/PMEM NODE — Stage 2: referenced file pages go to the promote list.
      * Collect into l_to_promote first, then bulk-add to the persistent
      * promote list under one lock acquisition.
      */
-    if (is_pmem_node) {
-      if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
-        if (is_file_backed_folio(folio)) {
-          list_add(&folio->lru, &l_to_promote);
-          nr_enqueued++;
-          atomic64_inc(&pages_active_to_promote);
-          continue;
-        }
-      }
+    if (is_pmem_node && referenced && is_file_backed_folio(folio)) {
+      list_add(&folio->lru, &l_to_promote);
+      nr_enqueued++;
+      atomic64_inc(&pages_active_to_promote);
+      continue;
     }
 
-    /* Referenced: keep active */
-    if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup,
-             &vm_flags) != 0) {
-      if ((vm_flags & VM_EXEC) && folio_is_file_lru(folio)) {
-        nr_rotated += folio_nr_pages(folio);
-        list_add(&folio->lru, &l_active);
-        continue;
-      }
+    /* Referenced executable file pages: keep active (rotate). */
+    if (referenced && (vm_flags & VM_EXEC) && folio_is_file_lru(folio)) {
+      nr_rotated += folio_nr_pages(folio);
+      list_add(&folio->lru, &l_active);
+      continue;
     }
 
-    /* Not referenced: deactivate */
+    /* Not referenced (or not worth keeping active): deactivate */
     folio_clear_active(folio);
     folio_set_workingset(folio);
     list_add(&folio->lru, &l_inactive);
@@ -865,8 +880,8 @@ static void scan_active_list(unsigned long nr_to_scan,
     pli->count += nr_enqueued;
     spin_unlock(&pli->lock);
 
-    printk(KERN_INFO "KTMM: [Stage 2] Enqueued %lu file pages active->promote (depth=%lu)\n",
-           nr_enqueued, pli->count);
+    // printk(KERN_INFO "KTMM: [Stage 2] Enqueued %lu file pages active->promote (depth=%lu)\n",
+           // nr_enqueued, pli->count);
   }
 
   /*
@@ -987,7 +1002,7 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 
     if (nr_migrated > 0) {
       atomic64_add(nr_migrated, &total_pages_demoted);
-      printk(KERN_INFO "KTMM: Demoted %lu file pages DRAM->PMEM\n", nr_migrated);
+      // printk(KERN_INFO "KTMM: Demoted %lu file pages DRAM->PMEM\n", nr_migrated);
     }
   }
 
@@ -996,8 +1011,9 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
   if (nr_activate > 0) {
     ktmm_move_folios_to_lru(lruvec, &l_active);
     if (is_pmem_node)
-      printk(KERN_INFO "KTMM: [Stage 1] Activated %lu file pages inactive->active\n",
-             nr_activate);
+      // printk(KERN_INFO "KTMM: [Stage 1] Activated %lu file pages inactive->active\n",
+             // nr_activate);
+      ;  // log removed: empty statement keeps the braceless control valid
   }
 
   /* Put back pages that weren't migrated */
@@ -1180,7 +1196,7 @@ int tmemd_start_available(void)
 
   pt_migrate_pages = (void *)symbol_lookup("migrate_pages");
   if (!pt_migrate_pages) {
-    pr_err("KTMM: could not resolve migrate_pages symbol\n");
+    // pr_err("KTMM: could not resolve migrate_pages symbol\n");
     return -ENOENT;
   }
 
@@ -1192,7 +1208,8 @@ int tmemd_start_available(void)
     if (kln)
       pt_buffer_heads_over_limit = (int *)kln("buffer_heads_over_limit");
     if (!pt_buffer_heads_over_limit)
-      pr_warn("KTMM: buffer_heads_over_limit unresolved; treating as 0\n");
+      // pr_warn("KTMM: buffer_heads_over_limit unresolved; treating as 0\n");
+      ;  // log removed: empty statement keeps the braceless control valid
   }
 
   for (i = 0; i < MAX_NUMNODES; i++) {
@@ -1208,8 +1225,8 @@ int tmemd_start_available(void)
   /* Designate the slow tier up front so no daemon races an unset value. */
   set_pmem_node_id(pmem_nid);
   set_pmem_node(pmem_nid);
-  pr_info("KTMM: fast tier = node %d (DRAM), slow tier = node %d (CXL/PMEM)\n",
-          dram_nid, pmem_nid);
+  // pr_info("KTMM: fast tier = node %d (DRAM), slow tier = node %d (CXL/PMEM)\n",
+          // dram_nid, pmem_nid);
 
   for_each_online_node(nid)
   {
@@ -1232,22 +1249,22 @@ void tmemd_stop_all(void)
 
   del_timer_sync(&page_stats_timer);
 
-  printk(KERN_INFO "*** KTMM FINAL: Promoted: %llu, Demoted: %llu ***\n",
-         (u64)atomic64_read(&total_pages_promoted),
-         (u64)atomic64_read(&total_pages_demoted));
+  // printk(KERN_INFO "*** KTMM FINAL: Promoted: %llu, Demoted: %llu ***\n",
+         // (u64)atomic64_read(&total_pages_promoted),
+         // (u64)atomic64_read(&total_pages_demoted));
 
-  printk(KERN_INFO "*** KTMM 3-STAGE PIPELINE FINAL ***\n");
-  printk(KERN_INFO "  Stage 1 (inactive->active):  %llu\n",
-         (u64)atomic64_read(&pages_inactive_to_active));
-  printk(KERN_INFO "  Stage 2 (active->promote):   %llu\n",
-         (u64)atomic64_read(&pages_active_to_promote));
-  printk(KERN_INFO "  Stage 3 (promote->DRAM):     %llu\n",
-         (u64)atomic64_read(&pages_promote_to_dram));
+  // printk(KERN_INFO "*** KTMM 3-STAGE PIPELINE FINAL ***\n");
+  // printk(KERN_INFO "  Stage 1 (inactive->active):  %llu\n",
+         // (u64)atomic64_read(&pages_inactive_to_active));
+  // printk(KERN_INFO "  Stage 2 (active->promote):   %llu\n",
+         // (u64)atomic64_read(&pages_active_to_promote));
+  // printk(KERN_INFO "  Stage 3 (promote->DRAM):     %llu\n",
+         // (u64)atomic64_read(&pages_promote_to_dram));
 
-  printk(KERN_INFO "*** KTMM Migration: attempted=%llu, success=%llu, alloc_fail=%llu ***\n",
-         (u64)atomic64_read(&migrate_attempted),
-         (u64)atomic64_read(&migrate_success),
-         (u64)atomic64_read(&migrate_alloc_fail));
+  // printk(KERN_INFO "*** KTMM Migration: attempted=%llu, success=%llu, alloc_fail=%llu ***\n",
+         // (u64)atomic64_read(&migrate_attempted),
+         // (u64)atomic64_read(&migrate_success),
+         // (u64)atomic64_read(&migrate_alloc_fail));
 
   for_each_online_node(nid)
   {
