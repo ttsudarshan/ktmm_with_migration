@@ -19,11 +19,18 @@
  *  isolated while on the promote list; NR_ISOLATED is adjusted when they
  *  finally migrate or get put back.
  *
- *  DRAM (node 0, pm_node=0):
- *    - scan_inactive_list: DEMOTE cold file pages to PMEM
+ *  Tiers are chosen by module params, NOT by node id 0/1. On this machine:
+ *      dram_nid = 0  (fast tier, local DRAM)
+ *      pmem_nid = 2  (slow tier, CPU-less CXL node)
+ *  Node 1 (the second DRAM socket) is deliberately NOT a participant: no
+ *  daemon is spawned for it, so it is never scanned, never a demote source,
+ *  and never a migration target.
+ *
+ *  FAST/DRAM node (node_id == dram_nid):
+ *    - scan_inactive_list: DEMOTE cold file pages to the slow tier
  *    - scan_active_list:   deactivate unreferenced pages (normal)
  *
- *  PMEM (node 1, pm_node!=0):
+ *  SLOW/PMEM node (node_id == pmem_nid, i.e. ktmm_is_pmem_node()==true):
  *    - scan_promote_list:  MIGRATE promote list pages to DRAM   (stage 3)
  *    - scan_active_list:   ENQUEUE hot file pages to promote    (stage 2)
  *    - scan_inactive_list: ACTIVATE referenced file pages       (stage 1)
@@ -99,7 +106,8 @@ static inline void set_pmem_node_id(int nid) { pmem_node_id = nid; }
 static inline void set_pmem_node(int nid)    { (void)nid; }  /* was: pgdat->pm_node */
 static inline void set_ktmm_scan(void)       { }            /* was: kernel reclaim toggle */
 
-/* Replaces "pgdat->pm_node != 0": is this the logical PMEM node? */
+/* Is this pgdat the logical slow (PMEM/CXL) tier? Compares against the
+ * module-selected pmem_node_id (set from the pmem_nid param at init). */
 static inline bool ktmm_is_pmem_node(struct pglist_data *pgdat)
 {
 	return pgdat->node_id == pmem_node_id;
@@ -462,6 +470,8 @@ static int ktmm_folio_referenced(struct folio *folio, int is_locked,
  */
 static struct page *ktmm_alloc_migrate_page(struct page *page, unsigned long private)
 {
+  /* private carries the target nid (passed as unsigned long by migrate_pages).
+   * Safe for the small node ids we use (0,2); revisit if node ids exceed INT_MAX. */
   int nid = (int)private;
   struct page *newpage;
   nodemask_t nodemask;
@@ -657,11 +667,11 @@ static inline bool is_file_backed_folio(struct folio *folio)
 /*****************************************************************************
  * LIST SCANNING FUNCTIONS — 3-STAGE PIPELINE
  *
- * DRAM (node 0, pm_node=0):
- *   - scan_inactive_list: DEMOTE cold file pages to PMEM
+ * FAST/DRAM node (node_id == dram_nid):
+ *   - scan_inactive_list: DEMOTE cold file pages to the slow tier
  *   - scan_active_list:   deactivate unreferenced pages
  *
- * PMEM (node 1, pm_node!=0):
+ * SLOW/PMEM node (node_id == pmem_nid):
  *   - scan_promote_list:  Stage 3 — migrate promote list -> DRAM
  *   - scan_active_list:   Stage 2 — enqueue hot file pages -> promote list
  *   - scan_inactive_list: Stage 1 — activate referenced file pages
@@ -775,6 +785,7 @@ static void scan_active_list(unsigned long nr_to_scan,
   unsigned long nr_taken;
   unsigned long nr_scanned;
   unsigned long vm_flags;
+  int referenced;            /* cached folio_referenced() result (see loop) */
   LIST_HEAD(l_hold);
   LIST_HEAD(l_active);
   LIST_HEAD(l_inactive);
@@ -820,32 +831,36 @@ static void scan_active_list(unsigned long nr_to_scan,
     }
 
     /*
-     * PMEM NODE — Stage 2: referenced file pages go to promote list.
+     * Evaluate references ONCE. folio_referenced() clears the PTE accessed
+     * bits as a side effect, so calling it twice on the same folio corrupts
+     * the signal -- the second call sees the bits the first already cleared
+     * and reports the page as cold. Capture the result and reuse it for every
+     * decision below. (This was the bug: the old code called it here AND again
+     * in the "keep active" branch.)
+     */
+    referenced = ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup,
+                                       &vm_flags);
+
+    /*
+     * SLOW/PMEM NODE — Stage 2: referenced file pages go to the promote list.
      * Collect into l_to_promote first, then bulk-add to the persistent
      * promote list under one lock acquisition.
      */
-    if (is_pmem_node) {
-      if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
-        if (is_file_backed_folio(folio)) {
-          list_add(&folio->lru, &l_to_promote);
-          nr_enqueued++;
-          atomic64_inc(&pages_active_to_promote);
-          continue;
-        }
-      }
+    if (is_pmem_node && referenced && is_file_backed_folio(folio)) {
+      list_add(&folio->lru, &l_to_promote);
+      nr_enqueued++;
+      atomic64_inc(&pages_active_to_promote);
+      continue;
     }
 
-    /* Referenced: keep active */
-    if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup,
-             &vm_flags) != 0) {
-      if ((vm_flags & VM_EXEC) && folio_is_file_lru(folio)) {
-        nr_rotated += folio_nr_pages(folio);
-        list_add(&folio->lru, &l_active);
-        continue;
-      }
+    /* Referenced executable file pages: keep active (rotate). */
+    if (referenced && (vm_flags & VM_EXEC) && folio_is_file_lru(folio)) {
+      nr_rotated += folio_nr_pages(folio);
+      list_add(&folio->lru, &l_active);
+      continue;
     }
 
-    /* Not referenced: deactivate */
+    /* Not referenced (or not worth keeping active): deactivate */
     folio_clear_active(folio);
     folio_set_workingset(folio);
     list_add(&folio->lru, &l_inactive);
