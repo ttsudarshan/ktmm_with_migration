@@ -106,7 +106,14 @@ int pmem_node = -1;
 /* Logical PMEM node id, chosen by the module (no kernel pm_node field). */
 #include <linux/moduleparam.h>
 
-static int pmem_node_id = -1;
+/*
+ * Prefixed with ktmm_ on purpose: the patched KTMM kernel declares
+ * pmem_node_id / set_pmem_node_id / set_pmem_node / set_ktmm_scan in
+ * include/linux/mm.h. Private names keep this module building on both the
+ * patched and vanilla trees, and keep its behaviour independent of the
+ * patched kernel's own tiering hooks.
+ */
+static int ktmm_pmem_node_id = -1;
 
 /*
  * Tier selection. Defaults target the node 0 <-> node 1 layout
@@ -130,29 +137,32 @@ static unsigned long promote_max_pages = 4096;
 module_param(promote_max_pages, ulong, 0644);
 MODULE_PARM_DESC(promote_max_pages, "Max pages held on the promote list");
 
-static inline void set_pmem_node_id(int nid) { pmem_node_id = nid; }
-static inline void set_pmem_node(int nid)    { (void)nid; }  /* was: pgdat->pm_node */
-static inline void set_ktmm_scan(void)       { }            /* was: kernel reclaim toggle */
+static inline void ktmm_set_pmem_node_id(int nid) { ktmm_pmem_node_id = nid; }
+static inline void ktmm_set_pmem_node(int nid)    { (void)nid; }  /* was: pgdat->pm_node */
+static inline void ktmm_set_scan(void)       { }            /* was: kernel reclaim toggle */
 
 /* Is this pgdat the logical slow (PMEM) tier? Compares against the
- * module-selected pmem_node_id (set from the pmem_nid param at init). */
+ * module-selected ktmm_pmem_node_id (set from the pmem_nid param at init). */
 static inline bool ktmm_is_pmem_node(struct pglist_data *pgdat)
 {
-	return pgdat->node_id == pmem_node_id;
+	return pgdat->node_id == ktmm_pmem_node_id;
 }
 
 /* ---------------------------------------------------------------------
- * struct scan_control is PRIVATE to mm/vmscan.c -- there is no public
- * header for it. The hooked isolate_lru_folios() reads fields out of the
- * pointer we hand it, so this MUST match the kernel's binary layout for
- * THIS exact kernel. VERIFY against your tree and replace if different:
+ * struct scan_control
  *
+ * PATCHED KTMM kernel: already defined in include/linux/swap.h. Use the
+ * kernel's copy (guaranteed to match the running kernel's layout) by building
+ * with:
+ *     make KCFLAGS=-DKTMM_KERNEL_HAS_SCAN_CONTROL
+ *
+ * VANILLA kernel: it is private to mm/vmscan.c, so we mirror it below. This
+ * copy MUST match the kernel's binary layout; verify with:
  *   sed -n '/^struct scan_control {/,/^};/p' \
  *       /home/tiwari/linux-6.1.133/mm/vmscan.c
- *
- * A mismatch = silent memory corruption, so do not skip this check.
- * (Layout below is mainline 6.1.)
+ * A mismatch = silent memory corruption. (Layout below is mainline 6.1.)
  * --------------------------------------------------------------------- */
+#ifndef KTMM_KERNEL_HAS_SCAN_CONTROL
 struct scan_control {
 	unsigned long nr_to_reclaim;
 	nodemask_t	*nodemask;
@@ -197,6 +207,8 @@ struct scan_control {
 	} nr;
 	struct reclaim_state reclaim_state;
 };
+#endif /* !KTMM_KERNEL_HAS_SCAN_CONTROL */
+
 
 /* migrate_pages() is not exported to modules; resolve it like the hooks. */
 static int (*pt_migrate_pages)(struct list_head *l, new_page_t new,
@@ -373,7 +385,7 @@ static void page_stats_timer_callback(struct timer_list *t)
   int nid;
 
   for_each_online_node(nid) {
-    if (nid == pmem_node_id)
+    if (nid == ktmm_pmem_node_id)
       plist_depth += READ_ONCE(promote_lists[nid].nr_pages);
   }
 
@@ -680,10 +692,10 @@ static struct page *ktmm_alloc_pages(gfp_t gfp_mask, unsigned int order, int pre
   nodemask_t nodemask_test;
   int nid;
 
-  if (pmem_node_id != -1) {
+  if (ktmm_pmem_node_id != -1) {
     nodes_clear(nodemask_test);
     for_each_node_state(nid, N_MEMORY) {
-      if (nid != pmem_node_id)
+      if (nid != ktmm_pmem_node_id)
         node_set(nid, nodemask_test);
     }
     nodemask = &nodemask_test;
@@ -1103,7 +1115,7 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
       /*
        * DRAM NODE: Cold (unreferenced) pages get demoted.
        */
-      if (is_dram_node && pmem_node_id != -1 && !is_referenced && can_migrate) {
+      if (is_dram_node && ktmm_pmem_node_id != -1 && !is_referenced && can_migrate) {
         list_del(&folio->lru);
         list_add(&folio->lru, &l_demote);
         atomic64_inc(&demote_candidates);
@@ -1118,7 +1130,7 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
    * DRAM NODE: Demote cold pages to PMEM
    */
   if (is_dram_node && !list_empty(&l_demote)) {
-    int target_node = pmem_node_id;
+    int target_node = ktmm_pmem_node_id;
 
     ktmm_migrate_folio_list(&l_demote, target_node, &nr_migrated);
 
@@ -1315,7 +1327,7 @@ int tmemd_start_available(void)
   int nid;
   int ret;
 
-  set_ktmm_scan();
+  ktmm_set_scan();
 
   pt_migrate_pages = (void *)symbol_lookup("migrate_pages");
   if (!pt_migrate_pages) {
@@ -1353,8 +1365,8 @@ int tmemd_start_available(void)
   mod_timer(&page_stats_timer, jiffies + 5 * HZ);
   
   /* Designate the slow tier up front so no daemon races an unset value. */
-  set_pmem_node_id(pmem_nid);
-  set_pmem_node(pmem_nid);
+  ktmm_set_pmem_node_id(pmem_nid);
+  ktmm_set_pmem_node(pmem_nid);
   pr_info("KTMM: fast tier = node %d (DRAM), slow tier = node %d (PMEM)\n",
           dram_nid, pmem_nid);
 
@@ -1407,7 +1419,7 @@ void tmemd_stop_all(void)
   /* Drain any remaining pages from promote lists before unhooking */
   for_each_online_node(nid)
   {
-    if (nid == pmem_node_id)
+    if (nid == ktmm_pmem_node_id)
       drain_promote_list(nid, NODE_DATA(nid));
   }
 
