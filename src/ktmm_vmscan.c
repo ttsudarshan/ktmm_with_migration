@@ -38,8 +38,8 @@
  *
  *  Tiers are chosen by module params, NOT hardcoded node ids. Current layout:
  *      dram_nid = 0  (fast tier, local DRAM)
- *      pmem_nid = 1  (slow tier, second NUMA node acting as PMEM)
- *  Node 2 (the CPU-less CXL node) is deliberately NOT a participant: no
+ *      pmem_nid = 2  (slow tier, CPU-less CXL node)
+ *  Node 1 (the second DRAM socket) is deliberately NOT a participant: no
  *  daemon is spawned for it, so it is never scanned, never a demote source,
  *  and never a migration target.
  *
@@ -110,13 +110,14 @@ static int pmem_node_id = -1;
 
 /*
  * Tier selection. Defaults target the node 0 <-> node 1 layout
- * (node 0 = fast DRAM, node 1 = slow tier). Override without recompiling, e.g.:
- *     sudo insmod build/ktmm.ko pmem_nid=1 dram_nid=0
+ * (node 0 = fast DRAM, node 2 = CPU-less CXL slow tier). Override without
+ * recompiling, e.g.:
+ *     sudo insmod build/ktmm.ko pmem_nid=2 dram_nid=0
  */
-static int pmem_nid = 1;   /* slow tier */
+static int pmem_nid = 2;   /* slow tier: CXL / PMEM */
 static int dram_nid = 0;   /* fast tier: local DRAM */
 module_param(pmem_nid, int, 0444);
-MODULE_PARM_DESC(pmem_nid, "NUMA node id used as the slow (PMEM) tier");
+MODULE_PARM_DESC(pmem_nid, "NUMA node id used as the slow (CXL/PMEM) tier");
 module_param(dram_nid, int, 0444);
 MODULE_PARM_DESC(dram_nid, "NUMA node id used as the fast (DRAM) tier");
 
@@ -525,7 +526,7 @@ static inline bool ktmm_folio_can_migrate(struct folio *folio);
 static struct page *ktmm_alloc_migrate_page(struct page *page, unsigned long private)
 {
   /* private carries the target nid (passed as unsigned long by migrate_pages).
-   * Safe for the small node ids we use (0,1); revisit if node ids exceed INT_MAX. */
+   * Safe for the small node ids we use (0,2); revisit if node ids exceed INT_MAX. */
   int nid = (int)private;
   struct folio *src = page_folio(page);
   unsigned int order = 0;
@@ -1355,7 +1356,7 @@ int tmemd_start_available(void)
   /* Designate the slow tier up front so no daemon races an unset value. */
   set_pmem_node_id(pmem_nid);
   set_pmem_node(pmem_nid);
-  pr_info("KTMM: fast tier = node %d (DRAM), slow tier = node %d (PMEM)\n",
+  pr_info("KTMM: fast tier = node %d (DRAM), slow tier = node %d (CXL/PMEM)\n",
           dram_nid, pmem_nid);
 
   for_each_online_node(nid)
