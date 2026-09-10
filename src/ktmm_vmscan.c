@@ -131,9 +131,27 @@ static unsigned long promote_max_pages = 4096;
 module_param(promote_max_pages, ulong, 0644);
 MODULE_PARM_DESC(promote_max_pages, "Max pages held on the promote list");
 
+/*
+ * Overflow onto the slow tier instead of OOM. When the fast nodes can't
+ * satisfy an order-0 allocation, retry with the slow node allowed.
+ *   1 (default): fast nodes first, CXL as last resort before OOM
+ *   0          : strict -- slow node only gets pages via demotion or an
+ *                explicit bind to it alone (old behaviour)
+ * Runtime tunable: /sys/module/ktmm/parameters/pmem_fallback
+ */
+static bool pmem_fallback = true;
+module_param(pmem_fallback, bool, 0644);
+MODULE_PARM_DESC(pmem_fallback, "Overflow order-0 allocations onto the slow tier instead of OOM");
+
 static inline void set_pmem_node_id(int nid) { pmem_node_id = nid; }
 static inline void set_pmem_node(int nid)    { (void)nid; }  /* was: pgdat->pm_node */
 static inline void set_ktmm_scan(void)       { }            /* was: kernel reclaim toggle */
+
+/* True once a sane slow-tier node id has been set. */
+static inline bool ktmm_pmem_node_valid(void)
+{
+	return pmem_node_id >= 0 && pmem_node_id < MAX_NUMNODES;
+}
 
 /* Is this pgdat the logical slow (PMEM) tier? Compares against the
  * module-selected pmem_node_id (set from the pmem_nid param at init). */
@@ -342,6 +360,9 @@ static atomic64_t migrate_attempted = ATOMIC64_INIT(0);        /* pages */
 static atomic64_t migrate_success = ATOMIC64_INIT(0);
 static atomic64_t migrate_alloc_fail = ATOMIC64_INIT(0);
 
+/* Allocations that overflowed onto the slow tier (pmem_fallback) */
+static atomic64_t alloc_pmem_fallback = ATOMIC64_INIT(0);
+
 static struct timer_list page_stats_timer;
 
 static void page_stats_timer_callback(struct timer_list *t)
@@ -399,6 +420,8 @@ static void page_stats_timer_callback(struct timer_list *t)
          att_anon, att_file, att_large, filter_pinned);
   printk(KERN_INFO "  Migrate: attempted=%llu, success=%llu, alloc_fail=%llu\n",
          mig_attempted, mig_success, alloc_fail);
+  printk(KERN_INFO "  Alloc overflow onto slow tier: %llu pages\n",
+         (u64)atomic64_read(&alloc_pmem_fallback));
   printk(KERN_INFO "*** END DEBUG ***\n");
 
   mod_timer(&page_stats_timer, jiffies + 5 * HZ);
@@ -671,25 +694,62 @@ static int ktmm_migrate_folio_list(struct list_head *folio_list, int target_nid,
 /**
  * ktmm_alloc_pages - hooked __alloc_pages
  *
- * Keeps normal page allocations off the logical PMEM node (preserves the
- * old __GFP_PMEM-era behaviour without the custom GFP flag). Migration
+ * Steers normal allocations to the fast nodes (preserves the old
+ * __GFP_PMEM-era behaviour without the custom GFP flag). Migration
  * allocations bypass this hook via ktmm_alloc_migrate_page().
+ *
+ * Rules, in order:
+ *   1. The caller's nodemask (numactl --membind, mbind()) is RESPECTED;
+ *      we only remove the slow node from it.
+ *   2. Bound to ONLY the slow node (--membind=2): honored as-is.
+ *   3. Otherwise try the fast nodes first. If that fails and the caller is
+ *      allowed on the slow node, overflow onto it instead of OOM-killing
+ *      (pmem_fallback=1, order-0 only).
+ *
+ * The first attempt drops __GFP_DIRECT_RECLAIM (kswapd is still woken).
+ * Without that, a full fast tier would go through direct reclaim and the
+ * OOM killer inside the first call and never reach the fallback. This
+ * matches stock Linux with zone_reclaim_mode=0, which also spills to a
+ * remote node before reclaiming locally.
  */
 static struct page *ktmm_alloc_pages(gfp_t gfp_mask, unsigned int order, int preferred_nid,
           nodemask_t *nodemask)
 {
-  nodemask_t nodemask_test;
-  int nid;
+  nodemask_t mask;
+  struct page *page;
 
-  if (pmem_node_id != -1) {
-    nodes_clear(nodemask_test);
-    for_each_node_state(nid, N_MEMORY) {
-      if (nid != pmem_node_id)
-        node_set(nid, nodemask_test);
-    }
-    nodemask = &nodemask_test;
-  }
+  if (!ktmm_pmem_node_valid())
+    return pt_alloc_pages(gfp_mask, order, preferred_nid, nodemask);
 
+  if (nodemask)
+    nodes_copy(mask, *nodemask);         /* keep numactl / mempolicy */
+  else
+    mask = node_states[N_MEMORY];
+
+  node_clear(pmem_node_id, mask);
+
+  /* Rule 2: explicitly bound to ONLY the slow node */
+  if (nodes_empty(mask))
+    return pt_alloc_pages(gfp_mask, order, preferred_nid, nodemask);
+
+  /*
+   * Fast nodes only (old behaviour) when: fallback disabled, high-order
+   * (callers like THP faults fall back to order-0 themselves, so big
+   * folios never land on CXL this way), __GFP_NOFAIL (needs direct
+   * reclaim), or the caller's own mask excludes the slow node.
+   */
+  if (!pmem_fallback || order > 0 || (gfp_mask & __GFP_NOFAIL) ||
+      (nodemask && !node_isset(pmem_node_id, *nodemask)))
+    return pt_alloc_pages(gfp_mask, order, preferred_nid, &mask);
+
+  /* Rule 3: fast nodes first, no direct reclaim, no failure splat */
+  page = pt_alloc_pages((gfp_mask & ~__GFP_DIRECT_RECLAIM) | __GFP_NOWARN,
+                        order, preferred_nid, &mask);
+  if (page)
+    return page;
+
+  /* Fast tier full: overflow onto the slow node (original mask/flags) */
+  atomic64_inc(&alloc_pmem_fallback);
   return pt_alloc_pages(gfp_mask, order, preferred_nid, nodemask);
 }
 
