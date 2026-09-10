@@ -722,7 +722,7 @@ static struct page *ktmm_alloc_pages(gfp_t gfp_mask, unsigned int order, int pre
     return pt_alloc_pages(gfp_mask, order, preferred_nid, nodemask);
 
   if (nodemask)
-    nodes_copy(mask, *nodemask);         /* keep numactl / mempolicy */
+    mask = *nodemask;                    /* keep numactl / mempolicy (struct copy; 6.1 has no nodes_copy) */
   else
     mask = node_states[N_MEMORY];
 
