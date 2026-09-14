@@ -143,6 +143,30 @@ static bool pmem_fallback = true;
 module_param(pmem_fallback, bool, 0644);
 MODULE_PARM_DESC(pmem_fallback, "Overflow order-0 allocations onto the slow tier instead of OOM");
 
+/*
+ * Steer normal allocations away from the slow tier (__GFP_PMEM-era behaviour).
+ *   1 (default): the slow node is removed from every allocation's nodemask,
+ *                so it only receives pages via demotion or an explicit bind.
+ *   0          : leave placement to the kernel. The slow node stays in the
+ *                zonelist and is used by NUMA distance like stock Linux.
+ *                Migration (promote/demote) is unaffected either way.
+ *
+ * Set 0 for a baseline arm that behaves like an unmodified tiered system.
+ * Runtime tunable: /sys/module/ktmm/parameters/steer_allocs
+ */
+static bool steer_allocs = true;
+module_param(steer_allocs, bool, 0644);
+MODULE_PARM_DESC(steer_allocs, "Remove the slow tier from normal allocation nodemasks");
+
+/* Keep the fast tier this many MB clear before steering an allocation to it.
+ * 0 (default) = only steer away from the slow node, never toward it early.
+ * When >0, an allocation is allowed onto the slow node as soon as the fast
+ * tier's free memory drops below the threshold, instead of waiting for the
+ * watermark failure that a busy demotion daemon keeps preventing. */
+static unsigned long fast_reserve_mb;
+module_param(fast_reserve_mb, ulong, 0644);
+MODULE_PARM_DESC(fast_reserve_mb, "Spill to the slow tier once the fast tier has less than this many MB free");
+
 static inline void set_pmem_node_id(int nid) { pmem_node_id = nid; }
 static inline void set_pmem_node(int nid)    { (void)nid; }  /* was: pgdat->pm_node */
 static inline void set_ktmm_scan(void)       { }            /* was: kernel reclaim toggle */
@@ -151,6 +175,36 @@ static inline void set_ktmm_scan(void)       { }            /* was: kernel recla
 static inline bool ktmm_pmem_node_valid(void)
 {
 	return pmem_node_id >= 0 && pmem_node_id < MAX_NUMNODES;
+}
+
+/*
+ * True when the fast tier has less than fast_reserve_mb free. Cheap enough
+ * for the allocation path: one per-node counter read, no locks, no zone walk.
+ * Racy by nature -- we only need a hint, and being wrong either way costs a
+ * single misplaced page.
+ */
+static inline bool ktmm_fast_tier_low(void)
+{
+	pg_data_t *pgdat;
+	unsigned long free_pages = 0;
+	int z;
+
+	if (dram_nid < 0 || dram_nid >= MAX_NUMNODES)
+		return false;
+
+	pgdat = NODE_DATA(dram_nid);
+	if (!pgdat)
+		return false;
+
+	/* NR_FREE_PAGES is a zone stat, so sum the node's populated zones. */
+	for (z = 0; z < MAX_NR_ZONES; z++) {
+		struct zone *zone = &pgdat->node_zones[z];
+
+		if (populated_zone(zone))
+			free_pages += zone_page_state(zone, NR_FREE_PAGES);
+	}
+
+	return free_pages < (fast_reserve_mb << (20 - PAGE_SHIFT));
 }
 
 /* Is this pgdat the logical slow (PMEM) tier? Compares against the
@@ -718,7 +772,18 @@ static struct page *ktmm_alloc_pages(gfp_t gfp_mask, unsigned int order, int pre
   nodemask_t mask;
   struct page *page;
 
-  if (!ktmm_pmem_node_valid())
+  if (!ktmm_pmem_node_valid() || !steer_allocs)
+    return pt_alloc_pages(gfp_mask, order, preferred_nid, nodemask);
+
+  /*
+   * Rule 0: fast tier already under pressure. Hand the allocation to the
+   * kernel with the caller's original mask so the slow node is reachable by
+   * NUMA distance. Without this the first attempt below keeps succeeding --
+   * the demotion daemon frees fast-tier pages just fast enough that the
+   * watermark failure which triggers Rule 3 never happens, and the slow node
+   * only ever receives demoted pages.
+   */
+  if (fast_reserve_mb && ktmm_fast_tier_low())
     return pt_alloc_pages(gfp_mask, order, preferred_nid, nodemask);
 
   if (nodemask)
