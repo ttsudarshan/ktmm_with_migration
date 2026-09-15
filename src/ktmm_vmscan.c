@@ -369,9 +369,9 @@ static void drain_promote_list(int nid, struct pglist_data *pgdat)
   if (nr_file)
     mod_node_page_state(pgdat, NR_ISOLATED_FILE, -nr_file);
 
-  if (nr_anon || nr_file)
-    printk(KERN_INFO "KTMM: Drained promote list on node %d: anon=%ld file=%ld pages\n",
-           nid, nr_anon, nr_file);
+  // if (nr_anon || nr_file)
+    // printk(KERN_INFO "KTMM: Drained promote list on node %d: anon=%ld file=%ld pages\n",
+           // nid, nr_anon, nr_file);
 }
 
 
@@ -421,62 +421,62 @@ static struct timer_list page_stats_timer;
 
 static void page_stats_timer_callback(struct timer_list *t)
 {
-  u64 promoted = atomic64_read(&total_pages_promoted);
-  u64 demoted = atomic64_read(&total_pages_demoted);
+  // u64 promoted = atomic64_read(&total_pages_promoted);
+  // u64 demoted = atomic64_read(&total_pages_demoted);
 
-  u64 s1_inactive_to_active = atomic64_read(&pages_inactive_to_active);
-  u64 s2_active_to_promote = atomic64_read(&pages_active_to_promote);
-  u64 s3_promote_to_dram = atomic64_read(&pages_promote_to_dram);
+  // u64 s1_inactive_to_active = atomic64_read(&pages_inactive_to_active);
+  // u64 s2_active_to_promote = atomic64_read(&pages_active_to_promote);
+  // u64 s3_promote_to_dram = atomic64_read(&pages_promote_to_dram);
 
-  u64 active_to_inactive = atomic64_read(&pages_active_to_inactive);
-  u64 scanned_inactive = atomic64_read(&pages_scanned_inactive);
-  u64 scanned_active = atomic64_read(&pages_scanned_active);
-  u64 scanned_promote = atomic64_read(&pages_scanned_promote);
+  // u64 active_to_inactive = atomic64_read(&pages_active_to_inactive);
+  // u64 scanned_inactive = atomic64_read(&pages_scanned_inactive);
+  // u64 scanned_active = atomic64_read(&pages_scanned_active);
+  // u64 scanned_promote = atomic64_read(&pages_scanned_promote);
 
-  u64 demo_cand = atomic64_read(&demote_candidates);
+  // u64 demo_cand = atomic64_read(&demote_candidates);
 
-  u64 filter_pinned = atomic64_read(&migrate_filter_pinned);
-  u64 att_anon = atomic64_read(&migrate_attempted_anon);
-  u64 att_file = atomic64_read(&migrate_attempted_file);
-  u64 att_large = atomic64_read(&migrate_attempted_large);
-  u64 plist_full = atomic64_read(&promote_list_full);
-  u64 mig_attempted = atomic64_read(&migrate_attempted);
-  u64 mig_success = atomic64_read(&migrate_success);
-  u64 alloc_fail = atomic64_read(&migrate_alloc_fail);
+  // u64 filter_pinned = atomic64_read(&migrate_filter_pinned);
+  // u64 att_anon = atomic64_read(&migrate_attempted_anon);
+  // u64 att_file = atomic64_read(&migrate_attempted_file);
+  // u64 att_large = atomic64_read(&migrate_attempted_large);
+  // u64 plist_full = atomic64_read(&promote_list_full);
+  // u64 mig_attempted = atomic64_read(&migrate_attempted);
+  // u64 mig_success = atomic64_read(&migrate_success);
+  // u64 alloc_fail = atomic64_read(&migrate_alloc_fail);
 
-  /* Promote list depth snapshot */
-  unsigned long plist_depth = 0;
-  int nid;
+  // /* Promote list depth snapshot */
+  // unsigned long plist_depth = 0;
+  // int nid;
 
-  for_each_online_node(nid) {
-    if (nid == pmem_node_id)
-      plist_depth += READ_ONCE(promote_lists[nid].nr_pages);
-  }
+  // for_each_online_node(nid) {
+    // if (nid == pmem_node_id)
+      // plist_depth += READ_ONCE(promote_lists[nid].nr_pages);
+  // }
 
-  printk(KERN_INFO "*** KTMM PAGE STATS: Total Promoted: %llu, Total Demoted: %llu ***\n",
-         promoted, demoted);
+  // printk(KERN_INFO "*** KTMM PAGE STATS: Total Promoted: %llu, Total Demoted: %llu ***\n",
+         // promoted, demoted);
 
-  printk(KERN_INFO "*** KTMM 3-STAGE PIPELINE ***\n");
-  printk(KERN_INFO "  Stage 1 (inactive->active):  %llu\n", s1_inactive_to_active);
-  printk(KERN_INFO "  Stage 2 (active->promote):   %llu\n", s2_active_to_promote);
-  printk(KERN_INFO "  Stage 3 (promote->DRAM):     %llu\n", s3_promote_to_dram);
-  printk(KERN_INFO "  Promote list depth (pages):  %lu / %lu (full-skips=%llu)\n",
-         plist_depth, promote_max_pages, plist_full);
+  // printk(KERN_INFO "*** KTMM 3-STAGE PIPELINE ***\n");
+  // printk(KERN_INFO "  Stage 1 (inactive->active):  %llu\n", s1_inactive_to_active);
+  // printk(KERN_INFO "  Stage 2 (active->promote):   %llu\n", s2_active_to_promote);
+  // printk(KERN_INFO "  Stage 3 (promote->DRAM):     %llu\n", s3_promote_to_dram);
+  // printk(KERN_INFO "  Promote list depth (pages):  %lu / %lu (full-skips=%llu)\n",
+         // plist_depth, promote_max_pages, plist_full);
 
-  printk(KERN_INFO "*** KTMM PAGE FLOW DEBUG ***\n");
-  printk(KERN_INFO "  Scanned: inactive=%llu, active=%llu, promote=%llu\n",
-         scanned_inactive, scanned_active, scanned_promote);
-  printk(KERN_INFO "  Deactivated (active->inactive): %llu\n", active_to_inactive);
-  printk(KERN_INFO "  Demote candidates: %llu\n", demo_cand);
+  // printk(KERN_INFO "*** KTMM PAGE FLOW DEBUG ***\n");
+  // printk(KERN_INFO "  Scanned: inactive=%llu, active=%llu, promote=%llu\n",
+         // scanned_inactive, scanned_active, scanned_promote);
+  // printk(KERN_INFO "  Deactivated (active->inactive): %llu\n", active_to_inactive);
+  // printk(KERN_INFO "  Demote candidates: %llu\n", demo_cand);
 
-  printk(KERN_INFO "*** KTMM MIGRATION DEBUG ***\n");
-  printk(KERN_INFO "  Attempted pages: anon=%llu, file=%llu | large folios=%llu | pinned skipped=%llu\n",
-         att_anon, att_file, att_large, filter_pinned);
-  printk(KERN_INFO "  Migrate: attempted=%llu, success=%llu, alloc_fail=%llu\n",
-         mig_attempted, mig_success, alloc_fail);
-  printk(KERN_INFO "  Alloc overflow onto slow tier: %llu pages\n",
-         (u64)atomic64_read(&alloc_pmem_fallback));
-  printk(KERN_INFO "*** END DEBUG ***\n");
+  // printk(KERN_INFO "*** KTMM MIGRATION DEBUG ***\n");
+  // printk(KERN_INFO "  Attempted pages: anon=%llu, file=%llu | large folios=%llu | pinned skipped=%llu\n",
+         // att_anon, att_file, att_large, filter_pinned);
+  // printk(KERN_INFO "  Migrate: attempted=%llu, success=%llu, alloc_fail=%llu\n",
+         // mig_attempted, mig_success, alloc_fail);
+  // printk(KERN_INFO "  Alloc overflow onto slow tier: %llu pages\n",
+         // (u64)atomic64_read(&alloc_pmem_fallback));
+  // printk(KERN_INFO "*** END DEBUG ***\n");
 
   mod_timer(&page_stats_timer, jiffies + 5 * HZ);
 }
@@ -969,8 +969,8 @@ static unsigned long scan_promote_list(unsigned long nr_to_scan,
   if (nr_migrated > 0) {
     atomic64_add(nr_migrated, &total_pages_promoted);
     atomic64_add(nr_migrated, &pages_promote_to_dram);
-    printk(KERN_INFO "KTMM: [Stage 3] Promoted %lu pages promote->DRAM\n",
-           nr_migrated);
+    // printk(KERN_INFO "KTMM: [Stage 3] Promoted %lu pages promote->DRAM\n",
+           // nr_migrated);
   }
 
   /*
@@ -1026,7 +1026,7 @@ static void scan_active_list(unsigned long nr_to_scan,
   __maybe_unused unsigned nr_deactivate, nr_activate;
   __maybe_unused unsigned nr_rotated = 0;
   unsigned long nr_enqueued = 0;  /* PAGES added to promote list */
-  unsigned long depth = 0;
+  // unsigned long depth = 0;
   int file = is_file_lru(lru);
   __maybe_unused int nid = pgdat->node_id;
   int is_pmem_node = ktmm_is_pmem_node(pgdat);
@@ -1124,11 +1124,11 @@ static void scan_active_list(unsigned long nr_to_scan,
     spin_lock(&pli->lock);
     list_splice_tail(&l_to_promote, &pli->head);
     pli->nr_pages += nr_enqueued;
-    depth = pli->nr_pages;
+    // depth = pli->nr_pages;
     spin_unlock(&pli->lock);
 
-    printk(KERN_INFO "KTMM: [Stage 2] Enqueued %lu %s pages active->promote (depth=%lu)\n",
-           nr_enqueued, file ? "file" : "anon", depth);
+    // printk(KERN_INFO "KTMM: [Stage 2] Enqueued %lu %s pages active->promote (depth=%lu)\n",
+           // nr_enqueued, file ? "file" : "anon", depth);
   }
 
   /*
@@ -1250,8 +1250,8 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 
     if (nr_migrated > 0) {
       atomic64_add(nr_migrated, &total_pages_demoted);
-      printk(KERN_INFO "KTMM: Demoted %lu %s pages DRAM->PMEM\n",
-             nr_migrated, file ? "file" : "anon");
+      // printk(KERN_INFO "KTMM: Demoted %lu %s pages DRAM->PMEM\n",
+             // nr_migrated, file ? "file" : "anon");
     }
   }
 
@@ -1259,10 +1259,10 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 
   if (nr_activate > 0) {
     ktmm_move_folios_to_lru(lruvec, &l_active);
-    if (is_pmem_node)
-      printk(KERN_INFO "KTMM: [Stage 1] Activated %lu folios inactive->active\n",
-             nr_activate);
-      ;  // log removed: empty statement keeps the braceless control valid
+    // if (is_pmem_node)
+      // printk(KERN_INFO "KTMM: [Stage 1] Activated %lu folios inactive->active\n",
+             // nr_activate);
+      // ;  // log removed: empty statement keeps the braceless control valid
   }
 
   /* Put back pages that weren't migrated */
