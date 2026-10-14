@@ -522,10 +522,21 @@ static unsigned long ktmm_percpu_sum(unsigned long __percpu *counter)
 static atomic64_t pages_eager_promoted = ATOMIC64_INIT(0);
 
 /*
- * Log-free build: nothing is printed while the module runs. The counters
- * above are still maintained (only the tmemd threads touch most of them) and
- * are dumped once, at rmmod.
+ * Logging build. Two kinds of output while the module runs:
+ *   - one line per daemon cycle in which pages moved (ktmm_log_cycle)
+ *   - this full dump every stats_interval_sec (0 = only at rmmod)
+ * Per-cycle lines are aggregated over all memcgs and lists, so a cycle prints
+ * at most one line per node. For timing-sensitive runs use the log-free
+ * branch (all_pages_logfree); the migration code is identical.
  */
+static unsigned int stats_interval_sec = 5;
+module_param(stats_interval_sec, uint, 0644);
+MODULE_PARM_DESC(stats_interval_sec, "Seconds between full stats dumps (0 = only at rmmod)");
+
+static bool log_cycles = true;
+module_param(log_cycles, bool, 0644);
+MODULE_PARM_DESC(log_cycles, "Print one line per daemon cycle in which pages moved");
+
 static void ktmm_print_stats(void)
 {
   u64 promoted = atomic64_read(&total_pages_promoted);
@@ -586,7 +597,70 @@ static void ktmm_print_stats(void)
   printk(KERN_INFO "  Alloc overflow onto slow tier: %lu, reserve spills: %lu (allocations)\n",
          ktmm_percpu_sum(&alloc_pmem_fallback),
          ktmm_percpu_sum(&alloc_reserve_spill));
+  {
+    unsigned long free, high;
+
+    ktmm_fast_tier_free(&free, &high);
+    printk(KERN_INFO "  DRAM node %d: free %lu MB, high wmark %lu MB, reserve %lu MB, promotable room %lu MB\n",
+           dram_nid, free >> (20 - PAGE_SHIFT), high >> (20 - PAGE_SHIFT),
+           READ_ONCE(fast_reserve_mb),
+           ktmm_fast_tier_room() >> (20 - PAGE_SHIFT));
+  }
   printk(KERN_INFO "*** END DEBUG ***\n");
+}
+
+static struct timer_list page_stats_timer;
+
+static void page_stats_timer_callback(struct timer_list *t)
+{
+  unsigned int sec = READ_ONCE(stats_interval_sec);
+
+  if (sec)
+    ktmm_print_stats();
+
+  /* Interval 0 just re-checks once a second, so it can be re-enabled live. */
+  mod_timer(&page_stats_timer, jiffies + (sec ? sec : 1) * HZ);
+}
+
+/* Counter snapshot taken around one daemon cycle. */
+struct ktmm_cycle_snap {
+  u64 s1, s2, s3, eager, demoted;
+};
+
+static void ktmm_cycle_snap(struct ktmm_cycle_snap *s)
+{
+  s->s1 = atomic64_read(&pages_inactive_to_active);
+  s->s2 = atomic64_read(&pages_active_to_promote);
+  s->s3 = atomic64_read(&pages_promote_to_dram);
+  s->eager = atomic64_read(&pages_eager_promoted);
+  s->demoted = atomic64_read(&total_pages_demoted);
+}
+
+/*
+ * One line per cycle, only if something moved. Promotion counters are only
+ * written by the slow node's daemon and demotion only by the fast node's, so
+ * each daemon's deltas are its own work.
+ */
+static void ktmm_log_cycle(pg_data_t *pgdat, const struct ktmm_cycle_snap *a)
+{
+  struct ktmm_cycle_snap b;
+
+  if (!READ_ONCE(log_cycles))
+    return;
+
+  ktmm_cycle_snap(&b);
+
+  if (ktmm_is_pmem_node(pgdat)) {
+    if (b.s1 == a->s1 && b.s2 == a->s2 && b.s3 == a->s3 && b.eager == a->eager)
+      return;
+    printk(KERN_INFO "KTMM: node %d cycle: inactive->active %llu folios, active->promote %llu, promote->DRAM %llu, eager->DRAM %llu pages (list %lu, DRAM room %lu MB)\n",
+           pgdat->node_id, b.s1 - a->s1, b.s2 - a->s2, b.s3 - a->s3,
+           b.eager - a->eager, READ_ONCE(promote_lists[pgdat->node_id].nr_pages),
+           ktmm_fast_tier_room() >> (20 - PAGE_SHIFT));
+  } else if (b.demoted != a->demoted) {
+    printk(KERN_INFO "KTMM: node %d cycle: demoted %llu pages -> node %d\n",
+           pgdat->node_id, b.demoted - a->demoted, pmem_node_id);
+  }
 }
 
 
@@ -1631,7 +1705,11 @@ static int tmemd(void *p)
 
   for ( ; ; )
   {
+    struct ktmm_cycle_snap snap;
+
+    ktmm_cycle_snap(&snap);
     scan_node(pgdat, &sc);
+    ktmm_log_cycle(pgdat, &snap);
 
     if (kthread_should_stop()) break;
 
@@ -1761,6 +1839,10 @@ int tmemd_start_available(void)
           scan_interval_ms, nr_pages_to_scan, fast_reserve_mb,
           eager_promote, steer_allocs, promote_max_pages);
 
+  /* Started only after nothing below can fail the init. */
+  timer_setup(&page_stats_timer, page_stats_timer_callback, 0);
+  mod_timer(&page_stats_timer, jiffies + HZ);
+
   for_each_online_node(nid)
   {
     pg_data_t *pgdat = NODE_DATA(nid);
@@ -1782,6 +1864,9 @@ int tmemd_start_available(void)
 void tmemd_stop_all(void)
 {
   int nid;
+
+  /* Self-rearming; del_timer_sync() handles that. */
+  del_timer_sync(&page_stats_timer);
 
   for (nid = 0; nid < MAX_NUMNODES; nid++)
   {
