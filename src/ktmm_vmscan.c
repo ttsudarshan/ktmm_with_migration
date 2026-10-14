@@ -91,9 +91,10 @@
 #include "ktmm_hook.h"
 #include "ktmm_vmscan.h"
 
-#define TMEMD_GFP_FLAGS GFP_NOIO
+#include <linux/percpu.h>
+#include <linux/rcupdate.h>
 
-int pmem_node = -1;
+#define TMEMD_GFP_FLAGS GFP_NOIO
 
 /* =====================================================================
  * PATCH-FREE SHIMS
@@ -295,7 +296,7 @@ static int *pt_buffer_heads_over_limit;
 static void (*pt_prep_transhuge_page)(struct page *page);
 
 static struct task_struct *tmemd_list[MAX_NUMNODES];
-wait_queue_head_t tmemd_wait[MAX_NUMNODES];
+static wait_queue_head_t tmemd_wait[MAX_NUMNODES];
 
 
 /*****************************************************************************
@@ -482,26 +483,20 @@ static void page_stats_timer_callback(struct timer_list *t)
 }
 
 
-/************** MISC HOOKED FUNCTION PROTOTYPES *****************************/
+/************** UNEXPORTED KERNEL FUNCTIONS *********************************
+ * Resolved by name at init (ktmm_resolve_symbols) and called directly. These
+ * are NOT ftrace-hooked: hooking them redirected every caller in the kernel
+ * through this module, and a task sleeping inside one (folio_referenced takes
+ * rmap locks) would return into freed module text after rmmod. Only
+ * __alloc_pages is hooked, because only it needs different behaviour.
+ *****************************************************************************/
 static struct mem_cgroup *(*pt_mem_cgroup_iter)(struct mem_cgroup *root,
         struct mem_cgroup *prev,
         struct mem_cgroup_reclaim_cookie *reclaim);
 
-static bool (*pt_zone_watermark_ok_safe)(struct zone *z,
-          unsigned int order,
-          unsigned long mark,
-          int highest_zoneidx);
-
-static struct pglist_data *(*pt_first_online_pgdat)(void);
-
-static struct zone *(*pt_next_zone)(struct zone *zone);
-
 static void (*pt_free_unref_page_list)(struct list_head *list);
 
 static void (*pt_lru_add_drain)(void);
-
-static void (*pt_cgroup_update_lru_size)(struct lruvec *lruvec, enum lru_list lru,
-          int zid, int nr_pages);
 
 static void (*pt_cgroup_uncharge_list)(struct list_head *page_list);
 
@@ -520,31 +515,12 @@ static struct page *(*pt_alloc_pages)(gfp_t gfp_mask, unsigned int order, int pr
           nodemask_t *nodemask);
 
 
-/**************** KTMM IMPLEMENTATION OF HOOKED FUNCTION **********************/
+/**************** THIN WRAPPERS FOR RESOLVED FUNCTIONS ************************/
 static struct mem_cgroup *ktmm_mem_cgroup_iter(struct mem_cgroup *root,
         struct mem_cgroup *prev,
         struct mem_cgroup_reclaim_cookie *reclaim)
 {
   return pt_mem_cgroup_iter(root, prev, reclaim);
-}
-
-
-static bool ktmm_zone_watermark_ok_safe(struct zone *z,
-          unsigned int order,
-          unsigned long mark,
-          int highest_zoneidx)
-{
-  return pt_zone_watermark_ok_safe(z, order, mark, highest_zoneidx);
-}
-
-static struct pglist_data *ktmm_first_online_pgdat(void)
-{
-  return pt_first_online_pgdat();
-}
-
-static struct zone *ktmm_next_zone(struct zone *zone)
-{
-  return pt_next_zone(zone);
 }
 
 static void ktmm_free_unref_page_list(struct list_head *list)
@@ -557,14 +533,11 @@ static void ktmm_lru_add_drain(void)
   pt_lru_add_drain();
 }
 
-static void ktmm_cgroup_update_lru_size(struct lruvec *lruvec, enum lru_list lru,
-          int zid, int nr_pages)
-{
-  pt_cgroup_update_lru_size(lruvec, lru, zid, nr_pages);
-}
-
 static void ktmm_cgroup_uncharge_list(struct list_head *page_list)
 {
+  /* Same guard as the kernel's mem_cgroup_uncharge_list() wrapper. */
+  if (mem_cgroup_disabled())
+    return;
   pt_cgroup_uncharge_list(page_list);
 }
 
@@ -766,13 +739,21 @@ static int ktmm_migrate_folio_list(struct list_head *folio_list, int target_nid,
  * matches stock Linux with zone_reclaim_mode=0, which also spills to a
  * remote node before reclaiming locally.
  */
-static struct page *ktmm_alloc_pages(gfp_t gfp_mask, unsigned int order, int preferred_nid,
-          nodemask_t *nodemask)
+static struct page *ktmm_steer_alloc_pages(gfp_t gfp_mask, unsigned int order,
+          int preferred_nid, nodemask_t *nodemask)
 {
   nodemask_t mask;
   struct page *page;
 
   if (!ktmm_pmem_node_valid() || !steer_allocs)
+    return pt_alloc_pages(gfp_mask, order, preferred_nid, nodemask);
+
+  /*
+   * __GFP_THISNODE on the slow node (hugetlb pool on node N, khugepaged
+   * collapse, kernel demotion, ...) can only be satisfied there. Removing the
+   * node would turn it into a guaranteed failure.
+   */
+  if ((gfp_mask & __GFP_THISNODE) && preferred_nid == pmem_node_id)
     return pt_alloc_pages(gfp_mask, order, preferred_nid, nodemask);
 
   /*
@@ -818,6 +799,50 @@ static struct page *ktmm_alloc_pages(gfp_t gfp_mask, unsigned int order, int pre
   return pt_alloc_pages(gfp_mask, order, preferred_nid, nodemask);
 }
 
+/*
+ * Tasks currently executing ktmm_alloc_pages(). An allocation can sleep in
+ * direct reclaim for a long time, so after the hook is removed rmmod must wait
+ * for this to reach zero before the module text is freed. Per-cpu so the hot
+ * allocation path never bounces a shared cache line; inc and dec may land on
+ * different CPUs, only the sum is meaningful.
+ */
+static DEFINE_PER_CPU(long, ktmm_alloc_inflight);
+
+static struct page *ktmm_alloc_pages(gfp_t gfp_mask, unsigned int order, int preferred_nid,
+          nodemask_t *nodemask)
+{
+  struct page *page;
+
+  this_cpu_inc(ktmm_alloc_inflight);
+  page = ktmm_steer_alloc_pages(gfp_mask, order, preferred_nid, nodemask);
+  this_cpu_dec(ktmm_alloc_inflight);
+
+  return page;
+}
+
+/* Call only after the __alloc_pages hook is unregistered. */
+static void ktmm_wait_alloc_hook_idle(void)
+{
+  long inflight;
+  int cpu;
+
+  /* Tasks preempted between the ftrace redirect and this_cpu_inc(). */
+  synchronize_rcu_tasks();
+
+  /* No new entries are possible, so the sum only decreases. */
+  for (;;) {
+    inflight = 0;
+    for_each_possible_cpu(cpu)
+      inflight += per_cpu(ktmm_alloc_inflight, cpu);
+    if (inflight <= 0)
+      break;
+    msleep(10);
+  }
+
+  /* Tasks preempted between this_cpu_dec() and the return. */
+  synchronize_rcu_tasks();
+}
+
 
 /*****************************************************************************
  * Helper Functions
@@ -833,19 +858,6 @@ static bool ktmm_cgroup_below_min(struct mem_cgroup *memcg)
 {
   return READ_ONCE(memcg->memory.emin) >=
     page_counter_read(&memcg->memory);
-}
-
-static __always_inline void ktmm_update_lru_sizes(struct lruvec *lruvec,
-      enum lru_list lru, unsigned long *nr_zone_taken)
-{
-  int zid;
-
-  for (zid = 0; zid < MAX_NR_ZONES; zid++) {
-    if (!nr_zone_taken[zid])
-      continue;
-
-    ktmm_cgroup_update_lru_size(lruvec, lru, zid, -nr_zone_taken[zid]);
-  }
 }
 
 static inline bool ktmm_folio_evictable(struct folio *folio)
@@ -1257,13 +1269,8 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 
   spin_lock_irq(&lruvec->lru_lock);
 
-  if (nr_activate > 0) {
+  if (nr_activate > 0)
     ktmm_move_folios_to_lru(lruvec, &l_active);
-    if (is_pmem_node)
-      printk(KERN_INFO "KTMM: [Stage 1] Activated %lu folios inactive->active\n",
-             nr_activate);
-      ;  // log removed: empty statement keeps the braceless control valid
-  }
 
   /* Put back pages that weren't migrated */
   if (!list_empty(&l_demote))
@@ -1273,6 +1280,11 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
   __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
 
   spin_unlock_irq(&lruvec->lru_lock);
+
+  /* Logged after unlock: printk with irqs off under lru_lock stalls reclaim. */
+  if (is_pmem_node && nr_activate > 0)
+    printk(KERN_INFO "KTMM: [Stage 1] Activated %lu folios inactive->active\n",
+           nr_activate);
 
   ktmm_cgroup_uncharge_list(&l_active);
   ktmm_free_unref_page_list(&l_active);
@@ -1291,16 +1303,23 @@ static unsigned long scan_list(enum lru_list lru,
         struct scan_control *sc,
         struct pglist_data *pgdat)
 {
-  if (is_active_lru(lru))
+  /*
+   * Active lists get Stage 2 only, like the kernel's shrink_list(). Falling
+   * through would run the inactive-list logic on the ACTIVE list as well:
+   * demoting active pages straight from DRAM, and clearing accessed bits on
+   * PMEM active pages before Stage 2 ever samples them.
+   */
+  if (is_active_lru(lru)) {
     scan_active_list(nr_to_scan, lruvec, sc, lru, pgdat);
+    return 0;
+  }
 
   return scan_inactive_list(nr_to_scan, lruvec, sc, lru, pgdat);
 }
 
 
 static void scan_node(pg_data_t *pgdat,
-    struct scan_control *sc,
-    struct mem_cgroup_reclaim_cookie *reclaim)
+    struct scan_control *sc)
 {
   enum lru_list lru;
   struct mem_cgroup *memcg;
@@ -1321,7 +1340,25 @@ static void scan_node(pg_data_t *pgdat,
   }
 
   memset(&sc->nr, 0, sizeof(sc->nr));
-  memcg = ktmm_mem_cgroup_iter(NULL, NULL, reclaim);
+
+  /*
+   * cgroup_disable=memory: mem_cgroup_iter() returns NULL and every folio is
+   * on the node's own lruvec. (mem_cgroup_lruvec() would handle this, but it
+   * references root_mem_cgroup, which is not exported to modules.)
+   */
+  if (mem_cgroup_disabled()) {
+    sc->target_mem_cgroup = NULL;
+    for_each_evictable_lru(lru)
+      scan_list(lru, 1024, &pgdat->__lruvec, sc, pgdat);
+    return;
+  }
+
+  /*
+   * Full hierarchy walk, no reclaim cookie. A cookie resumes the iterator
+   * shared with kswapd/direct reclaim, so the walk would start mid-tree and
+   * skip every memcg before that point (and perturb kswapd's round-robin).
+   */
+  memcg = ktmm_mem_cgroup_iter(NULL, NULL, NULL);
   sc->target_mem_cgroup = memcg;
 
   memcg_count = 0;
@@ -1359,9 +1396,12 @@ static void tmemd_try_to_sleep(pg_data_t *pgdat, int nid)
 
   if (freezing(current) || kthread_should_stop())
     return;
-  
+
   prepare_to_wait(&tmemd_wait[nid], &wait, TASK_INTERRUPTIBLE);
-  remaining = schedule_timeout(5 * HZ);
+  /* Re-check after setting the task state, or a kthread_stop() wakeup that
+   * landed in between is lost and rmmod waits out the full timeout. */
+  if (!kthread_should_stop())
+    remaining = schedule_timeout(5 * HZ);
 
   finish_wait(&tmemd_wait[nid], &wait);
 }
@@ -1373,10 +1413,6 @@ static int tmemd(void *p)
   int nid = pgdat->node_id;
   struct task_struct *task = current;
   const struct cpumask *cpumask = cpumask_of_node(nid);
-
-  struct mem_cgroup_reclaim_cookie reclaim = {
-    .pgdat = pgdat,
-  };
 
   struct reclaim_state reclaim_state = {
     .reclaimed_slab = 0,
@@ -1400,7 +1436,7 @@ static int tmemd(void *p)
 
   for ( ; ; )
   {
-    scan_node(pgdat, &sc, &reclaim);
+    scan_node(pgdat, &sc);
 
     if (kthread_should_stop()) break;
 
@@ -1418,69 +1454,115 @@ static int tmemd(void *p)
  * Start & Stop
  *****************************************************************************/
 
+/*
+ * The only real hook. It must stay an ftrace hook (not a plain lookup): the
+ * hook machinery stores __alloc_pages + MCOUNT_INSN_SIZE in pt_alloc_pages,
+ * which is how our own allocations bypass the redirect.
+ */
 static struct ktmm_hook vmscan_hooks[] = {
-  HOOK("mem_cgroup_iter", ktmm_mem_cgroup_iter, &pt_mem_cgroup_iter),
-  HOOK("zone_watermark_ok", ktmm_zone_watermark_ok_safe, &pt_zone_watermark_ok_safe),
-  HOOK("first_online_pgdat", ktmm_first_online_pgdat, &pt_first_online_pgdat),
-  HOOK("next_zone", ktmm_next_zone, &pt_next_zone),
-  HOOK("free_unref_page_list", ktmm_free_unref_page_list, &pt_free_unref_page_list),
-  HOOK("lru_add_drain", ktmm_lru_add_drain, &pt_lru_add_drain),
-  HOOK("mem_cgroup_update_lru_size", ktmm_cgroup_update_lru_size, &pt_cgroup_update_lru_size),
-  HOOK("__mem_cgroup_uncharge_list", ktmm_cgroup_uncharge_list, &pt_cgroup_uncharge_list),
-  HOOK("isolate_lru_folios", ktmm_isolate_lru_folios, &pt_isolate_lru_folios),
-  HOOK("move_folios_to_lru", ktmm_move_folios_to_lru, &pt_move_folios_to_lru),
-  HOOK("folio_putback_lru", ktmm_folio_putback_lru, &pt_folio_putback_lru),
-  HOOK("folio_referenced", ktmm_folio_referenced, &pt_folio_referenced),
   HOOK("__alloc_pages", ktmm_alloc_pages, &pt_alloc_pages),
 };
 
+/* Unexported functions called directly; all are required. */
+static const struct {
+  const char *name;
+  void **addr;
+} ktmm_syms[] = {
+  { "migrate_pages",              (void **)&pt_migrate_pages },
+  { "mem_cgroup_iter",            (void **)&pt_mem_cgroup_iter },
+  { "free_unref_page_list",       (void **)&pt_free_unref_page_list },
+  { "lru_add_drain",              (void **)&pt_lru_add_drain },
+  { "__mem_cgroup_uncharge_list", (void **)&pt_cgroup_uncharge_list },
+  { "isolate_lru_folios",         (void **)&pt_isolate_lru_folios },
+  { "move_folios_to_lru",         (void **)&pt_move_folios_to_lru },
+  { "folio_putback_lru",          (void **)&pt_folio_putback_lru },
+  { "folio_referenced",           (void **)&pt_folio_referenced },
+};
 
-int tmemd_start_available(void) 
+static int ktmm_resolve_symbols(void)
+{
+  unsigned long (*kln)(const char *);
+  int i;
+
+  /* kallsyms_lookup_name() is unexported since 5.7; bootstrap it via kprobe.
+   * It returns the true function entry (including ENDBR on IBT kernels). */
+  kln = (void *)symbol_lookup("kallsyms_lookup_name");
+  if (!kln) {
+    pr_err("KTMM: could not resolve kallsyms_lookup_name\n");
+    return -ENOENT;
+  }
+
+  for (i = 0; i < ARRAY_SIZE(ktmm_syms); i++) {
+    *ktmm_syms[i].addr = (void *)kln(ktmm_syms[i].name);
+    if (!*ktmm_syms[i].addr) {
+      pr_err("KTMM: could not resolve %s\n", ktmm_syms[i].name);
+      return -ENOENT;
+    }
+  }
+
+  /* Optional: unexported data symbol, read live in scan_active_list(). */
+  pt_buffer_heads_over_limit = (int *)kln("buffer_heads_over_limit");
+  if (!pt_buffer_heads_over_limit)
+    pr_warn("KTMM: buffer_heads_over_limit unresolved; treating as 0\n");
+
+  /* Optional: needed to build order>1 destination folios for THP migration. */
+  pt_prep_transhuge_page = (void *)kln("prep_transhuge_page");
+  if (!pt_prep_transhuge_page)
+    pr_warn("KTMM: prep_transhuge_page unresolved; large folios will be split before migrating\n");
+
+  return 0;
+}
+
+static bool ktmm_tier_nid_ok(int nid)
+{
+  return nid >= 0 && nid < MAX_NUMNODES && node_state(nid, N_MEMORY);
+}
+
+
+int tmemd_start_available(void)
 {
   int i;
   int nid;
   int ret;
 
+  /* A bad node id would reach NODE_DATA()/__alloc_pages() on a node that
+   * doesn't exist, so refuse to load instead. */
+  if (!ktmm_tier_nid_ok(dram_nid) || !ktmm_tier_nid_ok(pmem_nid) ||
+      dram_nid == pmem_nid) {
+    pr_err("KTMM: invalid tiers dram_nid=%d pmem_nid=%d (need two distinct nodes with memory)\n",
+           dram_nid, pmem_nid);
+    return -EINVAL;
+  }
+
   set_ktmm_scan();
 
-  pt_migrate_pages = (void *)symbol_lookup("migrate_pages");
-  if (!pt_migrate_pages) {
-    pr_err("KTMM: could not resolve migrate_pages symbol\n");
-    return -ENOENT;
-  }
-
-  /* Resolve the unexported buffer_heads_over_limit data symbol. */
-  {
-    unsigned long (*kln)(const char *);
-
-    kln = (void *)symbol_lookup("kallsyms_lookup_name");
-    if (kln)
-      pt_buffer_heads_over_limit = (int *)kln("buffer_heads_over_limit");
-    if (!pt_buffer_heads_over_limit)
-      pr_warn("KTMM: buffer_heads_over_limit unresolved; treating as 0\n");
-      ;  // log removed: empty statement keeps the braceless control valid
-
-    /* Needed to build order>1 destination folios for THP migration. */
-    pt_prep_transhuge_page = (void *)symbol_lookup("prep_transhuge_page");
-    if (!pt_prep_transhuge_page && kln)
-      pt_prep_transhuge_page = (void *)kln("prep_transhuge_page");
-    if (!pt_prep_transhuge_page)
-      pr_warn("KTMM: prep_transhuge_page unresolved; large folios will be split before migrating\n");
-  }
+  ret = ktmm_resolve_symbols();
+  if (ret)
+    return ret;
 
   for (i = 0; i < MAX_NUMNODES; i++) {
     init_waitqueue_head(&tmemd_wait[i]);
     init_promote_list(i);
   }
 
+  /* Designate the slow tier before the alloc hook or any daemon can see it. */
+  set_pmem_node_id(pmem_nid);
+  set_pmem_node(pmem_nid);
+
+  /*
+   * Nothing that outlives a failed init (timer, kthreads) may be started
+   * before this point: if init fails the module is freed without
+   * tmem_exit() ever running.
+   */
   ret = install_hooks(vmscan_hooks, ARRAY_SIZE(vmscan_hooks));
+  if (ret) {
+    pr_err("KTMM: failed to install __alloc_pages hook (%d)\n", ret);
+    return ret;
+  }
 
   timer_setup(&page_stats_timer, page_stats_timer_callback, 0);
   mod_timer(&page_stats_timer, jiffies + 5 * HZ);
-  
-  /* Designate the slow tier up front so no daemon races an unset value. */
-  set_pmem_node_id(pmem_nid);
-  set_pmem_node(pmem_nid);
+
   pr_info("KTMM: fast tier = node %d (DRAM), slow tier = node %d (CXL/PMEM)\n",
           dram_nid, pmem_nid);
 
@@ -1492,10 +1574,13 @@ int tmemd_start_available(void)
     if (nid != dram_nid && nid != pmem_nid)
       continue;
 
-    tmemd_list[nid] = kthread_run(&tmemd, pgdat, "tmemd");
+    tmemd_list[nid] = kthread_run(&tmemd, pgdat, "tmemd%d", nid);
+    if (IS_ERR(tmemd_list[nid]))
+      pr_err("KTMM: failed to start tmemd on node %d (%ld)\n",
+             nid, PTR_ERR(tmemd_list[nid]));
   }
 
-  return ret;
+  return 0;
 }
 
 
@@ -1524,18 +1609,20 @@ void tmemd_stop_all(void)
          (u64)atomic64_read(&migrate_success),
          (u64)atomic64_read(&migrate_alloc_fail));
 
-  for_each_online_node(nid)
+  for (nid = 0; nid < MAX_NUMNODES; nid++)
   {
     if (!IS_ERR_OR_NULL(tmemd_list[nid]))
       kthread_stop(tmemd_list[nid]);
+    tmemd_list[nid] = NULL;
   }
 
   /* Drain any remaining pages from promote lists before unhooking */
-  for_each_online_node(nid)
-  {
-    if (nid == pmem_node_id)
-      drain_promote_list(nid, NODE_DATA(nid));
-  }
+  if (ktmm_pmem_node_valid())
+    drain_promote_list(pmem_node_id, NODE_DATA(pmem_node_id));
 
   uninstall_hooks(vmscan_hooks, ARRAY_SIZE(vmscan_hooks));
+
+  /* Allocations already inside the hook (possibly asleep in direct reclaim)
+   * must leave module text before it is freed. */
+  ktmm_wait_alloc_hook_idle();
 }
