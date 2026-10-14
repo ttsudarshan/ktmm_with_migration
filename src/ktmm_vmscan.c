@@ -418,9 +418,12 @@ static atomic64_t migrate_alloc_fail = ATOMIC64_INIT(0);
 /* Allocations that overflowed onto the slow tier (pmem_fallback) */
 static atomic64_t alloc_pmem_fallback = ATOMIC64_INIT(0);
 
-static struct timer_list page_stats_timer;
-
-static void page_stats_timer_callback(struct timer_list *t)
+/*
+ * Log-free build: nothing is printed while the module runs. The counters
+ * above are still maintained (only the tmemd threads touch most of them) and
+ * are dumped once, at rmmod.
+ */
+static void ktmm_print_stats(void)
 {
   u64 promoted = atomic64_read(&total_pages_promoted);
   u64 demoted = atomic64_read(&total_pages_demoted);
@@ -478,8 +481,6 @@ static void page_stats_timer_callback(struct timer_list *t)
   printk(KERN_INFO "  Alloc overflow onto slow tier: %llu pages\n",
          (u64)atomic64_read(&alloc_pmem_fallback));
   printk(KERN_INFO "*** END DEBUG ***\n");
-
-  mod_timer(&page_stats_timer, jiffies + 5 * HZ);
 }
 
 
@@ -981,8 +982,6 @@ static unsigned long scan_promote_list(unsigned long nr_to_scan,
   if (nr_migrated > 0) {
     atomic64_add(nr_migrated, &total_pages_promoted);
     atomic64_add(nr_migrated, &pages_promote_to_dram);
-    printk(KERN_INFO "KTMM: [Stage 3] Promoted %lu pages promote->DRAM\n",
-           nr_migrated);
   }
 
   /*
@@ -1038,7 +1037,6 @@ static void scan_active_list(unsigned long nr_to_scan,
   __maybe_unused unsigned nr_deactivate, nr_activate;
   __maybe_unused unsigned nr_rotated = 0;
   unsigned long nr_enqueued = 0;  /* PAGES added to promote list */
-  unsigned long depth = 0;
   int file = is_file_lru(lru);
   __maybe_unused int nid = pgdat->node_id;
   int is_pmem_node = ktmm_is_pmem_node(pgdat);
@@ -1136,11 +1134,7 @@ static void scan_active_list(unsigned long nr_to_scan,
     spin_lock(&pli->lock);
     list_splice_tail(&l_to_promote, &pli->head);
     pli->nr_pages += nr_enqueued;
-    depth = pli->nr_pages;
     spin_unlock(&pli->lock);
-
-    printk(KERN_INFO "KTMM: [Stage 2] Enqueued %lu %s pages active->promote (depth=%lu)\n",
-           nr_enqueued, file ? "file" : "anon", depth);
   }
 
   /*
@@ -1260,11 +1254,8 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 
     ktmm_migrate_folio_list(&l_demote, target_node, &nr_migrated);
 
-    if (nr_migrated > 0) {
+    if (nr_migrated > 0)
       atomic64_add(nr_migrated, &total_pages_demoted);
-      printk(KERN_INFO "KTMM: Demoted %lu %s pages DRAM->PMEM\n",
-             nr_migrated, file ? "file" : "anon");
-    }
   }
 
   spin_lock_irq(&lruvec->lru_lock);
@@ -1280,11 +1271,6 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
   __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
 
   spin_unlock_irq(&lruvec->lru_lock);
-
-  /* Logged after unlock: printk with irqs off under lru_lock stalls reclaim. */
-  if (is_pmem_node && nr_activate > 0)
-    printk(KERN_INFO "KTMM: [Stage 1] Activated %lu folios inactive->active\n",
-           nr_activate);
 
   ktmm_cgroup_uncharge_list(&l_active);
   ktmm_free_unref_page_list(&l_active);
@@ -1560,9 +1546,6 @@ int tmemd_start_available(void)
     return ret;
   }
 
-  timer_setup(&page_stats_timer, page_stats_timer_callback, 0);
-  mod_timer(&page_stats_timer, jiffies + 5 * HZ);
-
   pr_info("KTMM: fast tier = node %d (DRAM), slow tier = node %d (CXL/PMEM)\n",
           dram_nid, pmem_nid);
 
@@ -1588,33 +1571,15 @@ void tmemd_stop_all(void)
 {
   int nid;
 
-  del_timer_sync(&page_stats_timer);
-
-  printk(KERN_INFO "*** KTMM FINAL: Promoted: %llu, Demoted: %llu ***\n",
-         (u64)atomic64_read(&total_pages_promoted),
-         (u64)atomic64_read(&total_pages_demoted));
-
-  printk(KERN_INFO "*** KTMM 3-STAGE PIPELINE FINAL ***\n");
-  printk(KERN_INFO "  Stage 1 (inactive->active):  %llu\n",
-         (u64)atomic64_read(&pages_inactive_to_active));
-  printk(KERN_INFO "  Stage 2 (active->promote):   %llu\n",
-         (u64)atomic64_read(&pages_active_to_promote));
-  printk(KERN_INFO "  Stage 3 (promote->DRAM):     %llu\n",
-         (u64)atomic64_read(&pages_promote_to_dram));
-
-  printk(KERN_INFO "*** KTMM Migration: attempted=%llu (anon=%llu file=%llu), success=%llu, alloc_fail=%llu ***\n",
-         (u64)atomic64_read(&migrate_attempted),
-         (u64)atomic64_read(&migrate_attempted_anon),
-         (u64)atomic64_read(&migrate_attempted_file),
-         (u64)atomic64_read(&migrate_success),
-         (u64)atomic64_read(&migrate_alloc_fail));
-
   for (nid = 0; nid < MAX_NUMNODES; nid++)
   {
     if (!IS_ERR_OR_NULL(tmemd_list[nid]))
       kthread_stop(tmemd_list[nid]);
     tmemd_list[nid] = NULL;
   }
+
+  /* Daemons are stopped, so the counters are final. */
+  ktmm_print_stats();
 
   /* Drain any remaining pages from promote lists before unhooking */
   if (ktmm_pmem_node_valid())
