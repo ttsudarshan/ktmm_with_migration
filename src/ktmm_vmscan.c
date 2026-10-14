@@ -4,6 +4,12 @@
  *  Page scanning and related functions.
  *
  *  Migration logic adapted from uts_migrate.c (kernel 5.14) for kernel 6.1
+ *  v10: fast-tier reserve (fast_reserve_mb) keeps DRAM headroom for
+ *      unmovable kernel allocations, since the CXL node is ZONE_MOVABLE;
+ *      steer_allocs now defaults off; scan rate is tunable
+ *      (scan_interval_ms, nr_pages_to_scan); eager_promote migrates
+ *      referenced CXL pages immediately while DRAM has room. All promotion
+ *      is sized to keep DRAM above high watermark + reserve.
  *  v9: migrates ALL LRU page types -- anonymous, file-backed, shmem, and
  *      large folios (THP). Only DMA-pinned folios are skipped.
  *
@@ -127,8 +133,9 @@ MODULE_PARM_DESC(dram_nid, "NUMA node id used as the fast (DRAM) tier");
  * larger than file volume, so without a cap NR_ISOLATED_ANON on the slow node
  * can grow until reclaim throttles. Tunable at runtime via
  * /sys/module/ktmm/parameters/promote_max_pages.
+ * Default 65536 pages = 256 MB, a few cycles' worth at the default scan rate.
  */
-static unsigned long promote_max_pages = 4096;
+static unsigned long promote_max_pages = 65536;
 module_param(promote_max_pages, ulong, 0644);
 MODULE_PARM_DESC(promote_max_pages, "Max pages held on the promote list");
 
@@ -146,27 +153,79 @@ MODULE_PARM_DESC(pmem_fallback, "Overflow order-0 allocations onto the slow tier
 
 /*
  * Steer normal allocations away from the slow tier (__GFP_PMEM-era behaviour).
- *   1 (default): the slow node is removed from every allocation's nodemask,
- *                so it only receives pages via demotion or an explicit bind.
- *   0          : leave placement to the kernel. The slow node stays in the
+ *   1          : the slow node is removed from every allocation's nodemask
+ *                until the fast tier is exhausted (see ktmm_steer_alloc_pages).
+ *   0 (default): leave placement to the kernel. The slow node stays in the
  *                zonelist and is used by NUMA distance like stock Linux.
  *                Migration (promote/demote) is unaffected either way.
  *
- * Set 0 for a baseline arm that behaves like an unmodified tiered system.
+ * Default 0: for one big process steering gains nothing over the kernel's own
+ * "fill node 0, then node 2" order, and it holds node 0 down to the min
+ * watermark before spilling.
  * Runtime tunable: /sys/module/ktmm/parameters/steer_allocs
  */
-static bool steer_allocs = true;
+static bool steer_allocs = false;
 module_param(steer_allocs, bool, 0644);
 MODULE_PARM_DESC(steer_allocs, "Remove the slow tier from normal allocation nodemasks");
 
-/* Keep the fast tier this many MB clear before steering an allocation to it.
- * 0 (default) = only steer away from the slow node, never toward it early.
- * When >0, an allocation is allowed onto the slow node as soon as the fast
- * tier's free memory drops below the threshold, instead of waiting for the
- * watermark failure that a busy demotion daemon keeps preventing. */
-static unsigned long fast_reserve_mb;
+/*
+ * Fast-tier reserve for kernel memory. Node 2 is ZONE_MOVABLE (daxctl
+ * --movable), so page tables, slab and other unmovable allocations can only
+ * come from the fast node. If user pages fill the fast node to its min
+ * watermark, the next page-table allocation OOMs with GBs free on node 2.
+ *
+ * Once the fast node's free memory (ZONE_NORMAL and up) drops below this,
+ * movable allocations are placed on the slow node first, leaving the rest of
+ * the fast node to unmovable kernel allocations. Applies whether or not
+ * steer_allocs is set. 0 disables it.
+ * Runtime tunable: /sys/module/ktmm/parameters/fast_reserve_mb
+ */
+static unsigned long fast_reserve_mb = 1024;
 module_param(fast_reserve_mb, ulong, 0644);
-MODULE_PARM_DESC(fast_reserve_mb, "Spill to the slow tier once the fast tier has less than this many MB free");
+MODULE_PARM_DESC(fast_reserve_mb, "MB of the fast tier kept for unmovable kernel allocations");
+
+/*
+ * Daemon scan interval in ms (was hard-coded 5000). Sets pipeline latency:
+ * a page needs up to three cycles to reach DRAM through the staged path.
+ * Clamped to [100, 60000] at use.
+ */
+static unsigned long scan_interval_ms = 1000;
+module_param(scan_interval_ms, ulong, 0644);
+MODULE_PARM_DESC(scan_interval_ms, "Daemon scan interval in ms (100-60000)");
+
+/*
+ * Pages scanned per LRU list per cycle, and drained from the promote list per
+ * cycle (was hard-coded 1024). With scan_interval_ms this sets migration
+ * throughput: 16384 pages/s = 64 MB/s per list. Each list is isolated in one
+ * call under lru_lock, so very large values lengthen irq-off sections.
+ * Clamped to [32, 262144] at use.
+ */
+static unsigned long nr_pages_to_scan = 16384;
+module_param(nr_pages_to_scan, ulong, 0644);
+MODULE_PARM_DESC(nr_pages_to_scan, "Pages scanned per LRU list per cycle (32-262144)");
+
+/*
+ * Eager promotion. While the fast node has room (free above its high
+ * watermark + fast_reserve_mb + headroom), referenced slow-tier pages are
+ * migrated to DRAM in the cycle they are seen, from the inactive or active
+ * list, instead of walking inactive -> active -> promote list -> DRAM.
+ * This is the case after a workload frees a large buffer on DRAM while its
+ * hot data still sits on CXL. Falls back to the staged pipeline when DRAM is
+ * tight. Runtime tunable: /sys/module/ktmm/parameters/eager_promote
+ */
+static bool eager_promote = true;
+module_param(eager_promote, bool, 0644);
+MODULE_PARM_DESC(eager_promote, "Promote referenced slow-tier pages immediately while DRAM has room");
+
+static inline unsigned long ktmm_scan_interval_jiffies(void)
+{
+	return msecs_to_jiffies(clamp(READ_ONCE(scan_interval_ms), 100UL, 60000UL));
+}
+
+static inline unsigned long ktmm_nr_to_scan(void)
+{
+	return clamp(READ_ONCE(nr_pages_to_scan), 32UL, 262144UL);
+}
 
 static inline void set_pmem_node_id(int nid) { pmem_node_id = nid; }
 static inline void set_pmem_node(int nid)    { (void)nid; }  /* was: pgdat->pm_node */
@@ -179,33 +238,58 @@ static inline bool ktmm_pmem_node_valid(void)
 }
 
 /*
- * True when the fast tier has less than fast_reserve_mb free. Cheap enough
- * for the allocation path: one per-node counter read, no locks, no zone walk.
- * Racy by nature -- we only need a hint, and being wrong either way costs a
- * single misplaced page.
+ * Free pages and high watermark of the fast node, ZONE_NORMAL and up. DMA and
+ * DMA32 are left out: lowmem_reserve keeps ordinary allocations out of them,
+ * so their free pages are not usable headroom (on mammoth DMA32 alone shows
+ * ~375 MB free while Normal is at its min watermark). Lock-free counter reads,
+ * cheap enough for the allocation path; racy, but only used as a hint.
  */
-static inline bool ktmm_fast_tier_low(void)
+static inline void ktmm_fast_tier_free(unsigned long *free, unsigned long *high)
 {
-	pg_data_t *pgdat;
-	unsigned long free_pages = 0;
+	pg_data_t *pgdat = NODE_DATA(dram_nid);
 	int z;
 
-	if (dram_nid < 0 || dram_nid >= MAX_NUMNODES)
-		return false;
-
-	pgdat = NODE_DATA(dram_nid);
-	if (!pgdat)
-		return false;
-
-	/* NR_FREE_PAGES is a zone stat, so sum the node's populated zones. */
-	for (z = 0; z < MAX_NR_ZONES; z++) {
+	*free = 0;
+	*high = 0;
+	for (z = ZONE_NORMAL; z < MAX_NR_ZONES; z++) {
 		struct zone *zone = &pgdat->node_zones[z];
 
-		if (populated_zone(zone))
-			free_pages += zone_page_state(zone, NR_FREE_PAGES);
+		if (!populated_zone(zone))
+			continue;
+		*free += zone_page_state(zone, NR_FREE_PAGES);
+		*high += high_wmark_pages(zone);
 	}
+}
 
-	return free_pages < (fast_reserve_mb << (20 - PAGE_SHIFT));
+static inline unsigned long ktmm_reserve_pages(void)
+{
+	return READ_ONCE(fast_reserve_mb) << (20 - PAGE_SHIFT);
+}
+
+/* True when the fast tier is inside its kernel-memory reserve. */
+static inline bool ktmm_fast_tier_low(void)
+{
+	unsigned long free, high;
+
+	if (!READ_ONCE(fast_reserve_mb))
+		return false;
+	ktmm_fast_tier_free(&free, &high);
+	return free < ktmm_reserve_pages();
+}
+
+/*
+ * Pages that can be promoted onto the fast tier while keeping its high
+ * watermark and the reserve clear. Promotion allocations skip reclaim but may
+ * still go down to the min watermark, so every promotion path sizes its batch
+ * by this; otherwise promotion itself can starve page-table allocations.
+ */
+static inline unsigned long ktmm_fast_tier_room(void)
+{
+	unsigned long free, high, floor;
+
+	ktmm_fast_tier_free(&free, &high);
+	floor = high + ktmm_reserve_pages();
+	return free > floor ? free - floor : 0;
 }
 
 /* Is this pgdat the logical slow (PMEM) tier? Compares against the
@@ -416,7 +500,26 @@ static atomic64_t migrate_success = ATOMIC64_INIT(0);
 static atomic64_t migrate_alloc_fail = ATOMIC64_INIT(0);
 
 /* Allocations that overflowed onto the slow tier (pmem_fallback) */
-static atomic64_t alloc_pmem_fallback = ATOMIC64_INIT(0);
+/*
+ * Allocation-path counters are per-cpu: they are bumped from page faults on
+ * every CPU, where a shared atomic would bounce a cache line at fault rate.
+ */
+static DEFINE_PER_CPU(unsigned long, alloc_pmem_fallback);
+/* Movable allocations moved to the slow tier by the fast-tier reserve */
+static DEFINE_PER_CPU(unsigned long, alloc_reserve_spill);
+
+static unsigned long ktmm_percpu_sum(unsigned long __percpu *counter)
+{
+  unsigned long sum = 0;
+  int cpu;
+
+  for_each_possible_cpu(cpu)
+    sum += *per_cpu_ptr(counter, cpu);
+  return sum;
+}
+
+/* Eager promotion (referenced slow-tier pages migrated without staging) */
+static atomic64_t pages_eager_promoted = ATOMIC64_INIT(0);
 
 /*
  * Log-free build: nothing is printed while the module runs. The counters
@@ -478,8 +581,11 @@ static void ktmm_print_stats(void)
          att_anon, att_file, att_large, filter_pinned);
   printk(KERN_INFO "  Migrate: attempted=%llu, success=%llu, alloc_fail=%llu\n",
          mig_attempted, mig_success, alloc_fail);
-  printk(KERN_INFO "  Alloc overflow onto slow tier: %llu pages\n",
-         (u64)atomic64_read(&alloc_pmem_fallback));
+  printk(KERN_INFO "  Eager promotions (pages): %llu\n",
+         (u64)atomic64_read(&pages_eager_promoted));
+  printk(KERN_INFO "  Alloc overflow onto slow tier: %lu, reserve spills: %lu (allocations)\n",
+         ktmm_percpu_sum(&alloc_pmem_fallback),
+         ktmm_percpu_sum(&alloc_reserve_spill));
   printk(KERN_INFO "*** END DEBUG ***\n");
 }
 
@@ -740,13 +846,46 @@ static int ktmm_migrate_folio_list(struct list_head *folio_list, int target_nid,
  * matches stock Linux with zone_reclaim_mode=0, which also spills to a
  * remote node before reclaiming locally.
  */
+/*
+ * Place a movable allocation on the slow node because the fast node is down
+ * to its reserve (see fast_reserve_mb). Returns NULL when the allocation
+ * can't or shouldn't go there; the caller then uses the original request.
+ */
+static struct page *ktmm_reserve_spill(gfp_t gfp_mask, unsigned int order,
+          nodemask_t *nodemask)
+{
+  nodemask_t slow;
+  struct page *page;
+
+  /* Unmovable memory can't use ZONE_MOVABLE: it is what the reserve is for.
+   * __GFP_THISNODE callers get the node they asked for. */
+  if (!(gfp_mask & __GFP_MOVABLE) || (gfp_mask & __GFP_THISNODE))
+    return NULL;
+
+  /* Respect numactl --membind / mbind() that excludes the slow node. */
+  if (nodemask && !node_isset(pmem_node_id, *nodemask))
+    return NULL;
+
+  nodes_clear(slow);
+  node_set(pmem_node_id, slow);
+
+  /* No direct reclaim: if the slow node is full too, the original request
+   * below gets to reclaim, as it would without the module. */
+  page = pt_alloc_pages((gfp_mask & ~__GFP_DIRECT_RECLAIM) | __GFP_NOWARN,
+                        order, pmem_node_id, &slow);
+  if (page)
+    this_cpu_inc(alloc_reserve_spill);
+
+  return page;
+}
+
 static struct page *ktmm_steer_alloc_pages(gfp_t gfp_mask, unsigned int order,
           int preferred_nid, nodemask_t *nodemask)
 {
   nodemask_t mask;
   struct page *page;
 
-  if (!ktmm_pmem_node_valid() || !steer_allocs)
+  if (!ktmm_pmem_node_valid())
     return pt_alloc_pages(gfp_mask, order, preferred_nid, nodemask);
 
   /*
@@ -758,14 +897,19 @@ static struct page *ktmm_steer_alloc_pages(gfp_t gfp_mask, unsigned int order,
     return pt_alloc_pages(gfp_mask, order, preferred_nid, nodemask);
 
   /*
-   * Rule 0: fast tier already under pressure. Hand the allocation to the
-   * kernel with the caller's original mask so the slow node is reachable by
-   * NUMA distance. Without this the first attempt below keeps succeeding --
-   * the demotion daemon frees fast-tier pages just fast enough that the
-   * watermark failure which triggers Rule 3 never happens, and the slow node
-   * only ever receives demoted pages.
+   * Rule 0: fast tier inside its kernel-memory reserve. Movable allocations
+   * go to the slow node first; everything else (and anything the slow node
+   * can't take) goes to the kernel with the caller's original mask. Runs
+   * whether or not steer_allocs is set.
    */
-  if (fast_reserve_mb && ktmm_fast_tier_low())
+  if (ktmm_fast_tier_low()) {
+    page = ktmm_reserve_spill(gfp_mask, order, nodemask);
+    if (page)
+      return page;
+    return pt_alloc_pages(gfp_mask, order, preferred_nid, nodemask);
+  }
+
+  if (!steer_allocs)
     return pt_alloc_pages(gfp_mask, order, preferred_nid, nodemask);
 
   if (nodemask)
@@ -796,7 +940,7 @@ static struct page *ktmm_steer_alloc_pages(gfp_t gfp_mask, unsigned int order,
     return page;
 
   /* Fast tier full: overflow onto the slow node (original mask/flags) */
-  atomic64_inc(&alloc_pmem_fallback);
+  this_cpu_inc(alloc_pmem_fallback);
   return pt_alloc_pages(gfp_mask, order, preferred_nid, nodemask);
 }
 
@@ -908,6 +1052,34 @@ static inline bool ktmm_folio_can_migrate(struct folio *folio)
  *   p pages move from inactive to active       (new arrivals)
  *****************************************************************************/
 
+/*
+ * Eager promotion: migrate the isolated folios on @list to the fast tier now.
+ * Like ktmm_migrate_folio_list(), failures are put back to the LRU and pinned
+ * folios stay on @list for the caller. NR_ISOLATED is the caller's.
+ */
+static void ktmm_promote_now(struct list_head *list)
+{
+  unsigned long nr_migrated = 0;
+
+  if (list_empty(list))
+    return;
+
+  ktmm_migrate_folio_list(list, dram_nid, &nr_migrated);
+  if (nr_migrated > 0) {
+    atomic64_add(nr_migrated, &total_pages_promoted);
+    atomic64_add(nr_migrated, &pages_eager_promoted);
+  }
+}
+
+/* Eager promotion applies to this batch: slow node, enabled, and DRAM can
+ * take every page isolated in it. */
+static inline bool ktmm_eager_batch(int is_pmem_node, unsigned long nr_taken)
+{
+  return is_pmem_node && READ_ONCE(eager_promote) && nr_taken &&
+         ktmm_fast_tier_room() >= nr_taken;
+}
+
+
 /**
  * scan_promote_list - Stage 3: migrate promote list pages to DRAM
  *
@@ -932,6 +1104,11 @@ static unsigned long scan_promote_list(unsigned long nr_to_scan,
   int target_node = dram_nid;  /* promote to the fast DRAM tier */
 
   if (!ktmm_is_pmem_node(pgdat))
+    return 0;
+
+  /* Only what fits on DRAM; the rest stays parked until room appears. */
+  nr_to_scan = min(nr_to_scan, ktmm_fast_tier_room());
+  if (nr_to_scan == 0)
     return 0;
 
   /*
@@ -1034,12 +1211,14 @@ static void scan_active_list(unsigned long nr_to_scan,
   LIST_HEAD(l_active);
   LIST_HEAD(l_inactive);
   LIST_HEAD(l_to_promote);   /* local batch before adding to promote list */
+  LIST_HEAD(l_promote_now);  /* eager promotion, migrated in this call */
   __maybe_unused unsigned nr_deactivate, nr_activate;
   __maybe_unused unsigned nr_rotated = 0;
   unsigned long nr_enqueued = 0;  /* PAGES added to promote list */
   int file = is_file_lru(lru);
   __maybe_unused int nid = pgdat->node_id;
   int is_pmem_node = ktmm_is_pmem_node(pgdat);
+  bool eager;
 
   ktmm_lru_add_drain();
 
@@ -1053,6 +1232,8 @@ static void scan_active_list(unsigned long nr_to_scan,
   spin_unlock_irq(&lruvec->lru_lock);
 
   atomic64_add(nr_taken, &pages_scanned_active);
+
+  eager = ktmm_eager_batch(is_pmem_node, nr_taken);
 
   while (!list_empty(&l_hold)) {
     struct folio *folio;
@@ -1092,6 +1273,12 @@ static void scan_active_list(unsigned long nr_to_scan,
      */
     if (is_pmem_node && referenced && ktmm_folio_can_migrate(folio)) {
       long nr = folio_nr_pages(folio);
+
+      /* DRAM has room: skip the promote list (folio is already active). */
+      if (eager) {
+        list_add(&folio->lru, &l_promote_now);
+        continue;
+      }
 
       /* Only this node's tmemd writes nr_pages, so an unlocked read is fine. */
       if (READ_ONCE(promote_lists[nid].nr_pages) + nr_enqueued + nr <=
@@ -1138,6 +1325,13 @@ static void scan_active_list(unsigned long nr_to_scan,
   }
 
   /*
+   * Eager promotion. Migrated and failed folios are fully resolved here (and
+   * count in the NR_ISOLATED decrement below); pinned leftovers stay active.
+   */
+  ktmm_promote_now(&l_promote_now);
+  list_splice(&l_promote_now, &l_active);
+
+  /*
    * Return non-promoted pages to LRU.
    * Pages on l_to_promote are NOT returned here — they stay isolated
    * on the promote list. We adjust NR_ISOLATED accordingly.
@@ -1182,12 +1376,14 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
   LIST_HEAD(folio_list);
   LIST_HEAD(l_active);
   LIST_HEAD(l_demote);  /* Pages to demote to PMEM */
+  LIST_HEAD(l_promote_now);  /* eager promotion, migrated in this call */
   unsigned long nr_scanned;
   unsigned long nr_taken = 0;
   unsigned long nr_migrated = 0;
   unsigned long nr_activate = 0;
   unsigned long vm_flags;
   bool file = is_file_lru(lru);
+  bool eager;
   __maybe_unused int nid = pgdat->node_id;
   int is_pmem_node = ktmm_is_pmem_node(pgdat);
   int is_dram_node = !ktmm_is_pmem_node(pgdat);
@@ -1208,6 +1404,8 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 
   atomic64_add(nr_taken, &pages_scanned_inactive);
 
+  eager = ktmm_eager_batch(is_pmem_node, nr_taken);
+
   /*
    * Process each folio based on node type
    */
@@ -1221,11 +1419,18 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
       /*
        * PMEM NODE — Stage 1: Activate referenced pages.
        * They'll move to the active list, then get picked up by
-       * scan_active_list (Stage 2) in the next scan cycle.
+       * scan_active_list (Stage 2) in the next scan cycle. With eager
+       * promotion they are migrated to DRAM in this call instead; they are
+       * still marked active so they land on DRAM's active list and get a
+       * deactivation cycle before demotion can consider them.
        */
       if (is_pmem_node && is_referenced && can_migrate) {
         list_del(&folio->lru);
         folio_set_active(folio);
+        if (eager) {
+          list_add(&folio->lru, &l_promote_now);
+          continue;
+        }
         list_add(&folio->lru, &l_active);
         nr_activate++;
         atomic64_inc(&pages_inactive_to_active);
@@ -1258,9 +1463,13 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
       atomic64_add(nr_migrated, &total_pages_demoted);
   }
 
+  /* PMEM NODE, eager: pinned leftovers go back as activated. */
+  ktmm_promote_now(&l_promote_now);
+  list_splice(&l_promote_now, &l_active);
+
   spin_lock_irq(&lruvec->lru_lock);
 
-  if (nr_activate > 0)
+  if (!list_empty(&l_active))
     ktmm_move_folios_to_lru(lruvec, &l_active);
 
   /* Put back pages that weren't migrated */
@@ -1322,7 +1531,7 @@ static void scan_node(pg_data_t *pgdat,
    *   - Stage 1 below feeds the active list for t+1's Stage 2
    */
   if (ktmm_is_pmem_node(pgdat)) {
-    scan_promote_list(1024, pgdat);
+    scan_promote_list(ktmm_nr_to_scan(), pgdat);
   }
 
   memset(&sc->nr, 0, sizeof(sc->nr));
@@ -1335,7 +1544,7 @@ static void scan_node(pg_data_t *pgdat,
   if (mem_cgroup_disabled()) {
     sc->target_mem_cgroup = NULL;
     for_each_evictable_lru(lru)
-      scan_list(lru, 1024, &pgdat->__lruvec, sc, pgdat);
+      scan_list(lru, ktmm_nr_to_scan(), &pgdat->__lruvec, sc, pgdat);
     return;
   }
 
@@ -1363,7 +1572,7 @@ static void scan_node(pg_data_t *pgdat,
     }
 
     for_each_evictable_lru(lru) {
-      unsigned long nr_to_scan = 1024;
+      unsigned long nr_to_scan = ktmm_nr_to_scan();
 
       scan_list(lru, nr_to_scan, lruvec, sc, pgdat);
     }
@@ -1387,7 +1596,7 @@ static void tmemd_try_to_sleep(pg_data_t *pgdat, int nid)
   /* Re-check after setting the task state, or a kthread_stop() wakeup that
    * landed in between is lost and rmmod waits out the full timeout. */
   if (!kthread_should_stop())
-    remaining = schedule_timeout(5 * HZ);
+    remaining = schedule_timeout(ktmm_scan_interval_jiffies());
 
   finish_wait(&tmemd_wait[nid], &wait);
 }
@@ -1548,6 +1757,9 @@ int tmemd_start_available(void)
 
   pr_info("KTMM: fast tier = node %d (DRAM), slow tier = node %d (CXL/PMEM)\n",
           dram_nid, pmem_nid);
+  pr_info("KTMM: scan_interval_ms=%lu nr_pages_to_scan=%lu fast_reserve_mb=%lu eager_promote=%d steer_allocs=%d promote_max_pages=%lu\n",
+          scan_interval_ms, nr_pages_to_scan, fast_reserve_mb,
+          eager_promote, steer_allocs, promote_max_pages);
 
   for_each_online_node(nid)
   {
